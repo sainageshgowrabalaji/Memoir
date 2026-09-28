@@ -3,6 +3,7 @@
 //   items   every note, link and photo, with what Memoir worked out about it
 //   todos   the to-do list, each one pointing back to the item it came from
 //   meta    small settings, like whether full-text search is available
+//   item_meanings  each item's meaning from the on-phone model, for search by meaning
 //
 // user_version is SQLite's own schema number, so later versions of the app can
 // add columns without losing anything already saved.
@@ -15,7 +16,7 @@ export interface Db {
   getFirstAsync<T>(sql: string, params?: unknown[]): Promise<T | null>;
 }
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const TABLES = `
 PRAGMA journal_mode = WAL;
@@ -48,6 +49,15 @@ CREATE INDEX IF NOT EXISTS todos_open ON todos (done_at, due_at);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `;
 
+// Version 2. The model's version is kept with each row, so a newer model can redo them.
+const MEANINGS = `
+CREATE TABLE IF NOT EXISTS item_meanings (
+  item_id INTEGER PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+  model INTEGER NOT NULL,
+  vector TEXT NOT NULL
+);
+`;
+
 // Full-text search, like a tiny search engine inside the file. "porter" matches word
 // forms, so "hike" finds "hiking". If a phone's SQLite lacks it, Memoir falls back to LIKE.
 const SEARCH = `
@@ -74,10 +84,11 @@ END;
 export async function migrate(db: Db): Promise<{ fullText: boolean }> {
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const version = row?.user_version ?? 0;
-  if (version < 1) {
-    await db.execAsync(TABLES);
-    await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-  }
+  if (version < 1) await db.execAsync(TABLES);
+  if (version < 2) await db.execAsync(MEANINGS);
+  if (version < SCHEMA_VERSION) await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  // Foreign keys are switched on per connection, so every time the app opens.
+  await db.execAsync('PRAGMA foreign_keys = ON');
   let fullText = true;
   try {
     await db.execAsync(SEARCH);

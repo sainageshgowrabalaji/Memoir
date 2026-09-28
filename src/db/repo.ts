@@ -1,9 +1,10 @@
 // Saving, listing, searching and to-dos. Every function takes the database as its first
 // argument, like a DAO in Java, so the same code runs on the phone and in tests.
 
-import { analyze, type Capture, type Kind, type Scope } from '../brain/analyze';
+import { analyze, meaningText, type Capture, type Kind, type Scope } from '../brain/analyze';
 import type { CategoryId } from '../brain/categories';
 import type { Source } from '../brain/links';
+import { embed, MODEL_VERSION, packVector, similarity, unpackVector } from '../brain/meaning';
 import type { Query } from '../brain/query';
 import type { OpenTodo } from '../brain/reminders';
 import type { Db } from './schema';
@@ -96,6 +97,7 @@ export async function saveCapture(db: Db, capture: Capture, now = new Date(), as
     [a.kind, a.title, a.text, a.url, a.source, capture.photoUri ?? null, a.category, a.scope,
       JSON.stringify(a.people), JSON.stringify(a.tags), at, at],
   );
+  if (a.meaning) await saveMeaning(db, id, a.meaning);
   let todo: Todo | null = null;
   const todoGuess = a.todo ?? (asTodo ? { title: a.title, dueAt: null, dateText: null } : null);
   if (todoGuess) {
@@ -107,6 +109,33 @@ export async function saveCapture(db: Db, capture: Capture, now = new Date(), as
   const item = await getItem(db, id);
   if (!item) throw new Error('The item was not saved.');
   return { item, todo };
+}
+
+async function saveMeaning(db: Db, itemId: number, meaning: Float32Array) {
+  await db.runAsync('INSERT OR REPLACE INTO item_meanings (item_id, model, vector) VALUES (?, ?, ?)', [
+    itemId, MODEL_VERSION, packVector(meaning),
+  ]);
+}
+
+/**
+ * Works out the meaning of anything saved before the model existed, or with an older model.
+ * Runs when the app opens. Returns how many items it filled in.
+ */
+export async function fillMeanings(db: Db): Promise<number> {
+  const rows = await db.getAllAsync<ItemRow>(
+    `SELECT items.* FROM items LEFT JOIN item_meanings ON item_meanings.item_id = items.id
+     WHERE item_meanings.item_id IS NULL OR item_meanings.model != ?`,
+    [MODEL_VERSION],
+  );
+  let filled = 0;
+  for (const row of rows) {
+    const item = toItem(row);
+    const meaning = embed(meaningText(item.text, item.url, item.people));
+    if (!meaning) continue;
+    await saveMeaning(db, item.id, meaning);
+    filled++;
+  }
+  return filled;
 }
 
 // ------------------------------------------------------------ reading
@@ -195,14 +224,18 @@ export async function updateItem(db: Db, id: number, patch: { category?: Categor
 export async function deleteItem(db: Db, id: number): Promise<string | null> {
   const row = await db.getFirstAsync<{ photo_uri: string | null }>('SELECT photo_uri FROM items WHERE id = ?', [id]);
   await db.runAsync('DELETE FROM todos WHERE item_id = ?', [id]);
+  await db.runAsync('DELETE FROM item_meanings WHERE item_id = ?', [id]);
   await db.runAsync('DELETE FROM items WHERE id = ?', [id]);
   return row?.photo_uri ?? null;
 }
 
 // ------------------------------------------------------------ searching
 
-export type Found = { item: Item; matched: string[] };
+/** `close` means it was found by meaning, not by your words, and the screen says so. */
+export type Found = { item: Item; matched: string[]; close: boolean };
 export type SearchResult = { found: Found[]; loose: boolean };
+
+type Scored = Found & { score: number };
 
 async function fullTextOn(db: Db): Promise<boolean> {
   const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM meta WHERE key = 'full_text'");
@@ -216,29 +249,28 @@ function ftsExpression(terms: string[]): string {
 function filtersSql(query: Query, strict: boolean): { where: string[]; params: unknown[] } {
   const where: string[] = [];
   const params: unknown[] = [];
-  if (strict) {
-    if (query.from !== null) {
+  if (!strict) return { where, params };
+  if (query.from !== null) {
     where.push('items.created_at >= ?');
     params.push(query.from);
   }
-    if (query.to !== null) {
+  if (query.to !== null) {
     where.push('items.created_at < ?');
     params.push(query.to);
   }
-    if (query.kinds.length) {
+  if (query.kinds.length) {
     where.push(`items.kind IN (${query.kinds.map(() => '?').join(', ')})`);
     params.push(...query.kinds);
   }
-    if (query.sources.length) {
-      where.push(`items.source IN (${query.sources.map(() => '?').join(', ')})`);
-      params.push(...query.sources);
-    }
-    for (const person of query.people) {
-      where.push('items.people LIKE ?');
-      params.push(`%"${person}"%`);
-    }
-    if (query.todosOnly) where.push('items.id IN (SELECT item_id FROM todos WHERE item_id IS NOT NULL)');
+  if (query.sources.length) {
+    where.push(`items.source IN (${query.sources.map(() => '?').join(', ')})`);
+    params.push(...query.sources);
   }
+  for (const person of query.people) {
+    where.push('items.people LIKE ?');
+    params.push(`%"${person}"%`);
+  }
+  if (query.todosOnly) where.push('items.id IN (SELECT item_id FROM todos WHERE item_id IS NOT NULL)');
   return { where, params };
 }
 
@@ -248,7 +280,8 @@ function coverage(item: Item, terms: string[]): string[] {
   return terms.filter((t) => haystack.includes(t.length > 4 ? t.slice(0, t.length - 2) : t));
 }
 
-async function runSearch(db: Db, query: Query, strict: boolean, limit: number): Promise<Found[]> {
+/** Things that contain your words (or, with no words, match your filters), best first. */
+async function byWords(db: Db, query: Query, strict: boolean, limit: number): Promise<Scored[]> {
   const { where, params } = filtersSql(query, strict);
   let rows: ItemRow[];
   if (query.terms.length && (await fullTextOn(db))) {
@@ -275,30 +308,89 @@ async function runSearch(db: Db, query: Query, strict: boolean, limit: number): 
   }
 
   const now = Date.now();
-  const scored = rows.map((row, rank) => {
+  return rows.map((row, rank) => {
     const item = toItem(row);
     const matched = coverage(item, query.terms);
     const categoryHit = query.categories.includes(item.category) ? 1 : 0;
     const ageDays = (now - item.createdAt) / (24 * 60 * 60 * 1000);
     // More of your words matched first, then the search engine's own order, then newer things.
     const score = matched.length * 10 + categoryHit * 3 - rank * 0.1 - Math.min(ageDays, 365) * 0.002;
-    return { item, matched, score };
+    return { item, matched, close: false, score };
   });
-  return scored
-    .sort((a, b) => b.score - a.score)
+}
+
+// How alike a question and an item must be to show an item that has none of the question's words.
+// Unrelated pairs score below 0.4 nineteen times out of twenty, so this keeps guesses out.
+const CLOSE_ALONE = 0.45;
+// When your words already found things, only strong matches by meaning join them.
+const CLOSE_BESIDE = 0.55;
+const MAX_CLOSE = 5;
+
+/** How close every candidate item is to the question's meaning, by item id. */
+async function byMeaning(db: Db, query: Query, strict: boolean): Promise<Map<number, { row: ItemRow; similarity: number }>> {
+  const scores = new Map<number, { row: ItemRow; similarity: number }>();
+  const question = query.meaning ? embed(query.meaning) : null;
+  if (!question) return scores;
+  const { where, params } = filtersSql(query, strict);
+  const rows = await db.getAllAsync<ItemRow & { vector: string }>(
+    `SELECT items.*, item_meanings.vector FROM items JOIN item_meanings ON item_meanings.item_id = items.id
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY items.created_at DESC LIMIT 5000`,
+    params,
+  );
+  for (const row of rows) scores.set(row.id, { row, similarity: similarity(question, unpackVector(row.vector)) });
+  return scores;
+}
+
+async function runSearch(db: Db, query: Query, strict: boolean, limit: number): Promise<Found[]> {
+  const [words, meanings] = await Promise.all([byWords(db, query, strict, limit), byMeaning(db, query, strict)]);
+  // Among things that share your words, the ones closer in meaning rise.
+  for (const found of words) found.score += (meanings.get(found.item.id)?.similarity ?? 0) * 6;
+
+  const seen = new Set(words.map((f) => f.item.id));
+  const floor = words.length ? CLOSE_BESIDE : CLOSE_ALONE;
+  const candidates = [...meanings.values()].filter((m) => !seen.has(m.row.id) && m.similarity >= floor);
+  const best = Math.max(0, ...candidates.map((m) => m.similarity));
+  const close: Scored[] = candidates
+    .filter((m) => m.similarity >= best - 0.12)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, MAX_CLOSE)
+    .map((m) => ({ item: toItem(m.row), matched: [], close: true, score: m.similarity * 6 }));
+
+  return [...words.sort((a, b) => b.score - a.score), ...close]
     .slice(0, limit)
-    .map(({ item, matched }) => ({ item, matched }));
+    .map(({ item, matched, close: isClose }) => ({ item, matched, close: isClose }));
 }
 
 /**
- * Answers a question from your saved things. If the filters you said (like "last week")
- * find nothing, it tries again without them and says so, instead of an empty screen.
+ * Answers a question from your saved things, by your words and by meaning. If the filters you
+ * said (like "last week") find nothing, it tries again without them and says so.
  */
 export async function search(db: Db, query: Query, limit = 20): Promise<SearchResult> {
   const found = await runSearch(db, query, true, limit);
-  if (found.length || !query.terms.length) return { found, loose: false };
+  if (found.length || !(query.terms.length || query.meaning)) return { found, loose: false };
   const nearby = await runSearch(db, query, false, limit);
   return { found: nearby, loose: nearby.length > 0 };
+}
+
+// Close enough to show as "Like this" on an item's page.
+const RELATED = 0.6;
+
+/** Other things you saved that mean something similar, closest first. */
+export async function related(db: Db, itemId: number, limit = 3): Promise<Item[]> {
+  const own = await db.getFirstAsync<{ vector: string }>('SELECT vector FROM item_meanings WHERE item_id = ?', [itemId]);
+  if (!own) return [];
+  const target = unpackVector(own.vector);
+  const rows = await db.getAllAsync<ItemRow & { vector: string }>(
+    `SELECT items.*, item_meanings.vector FROM items JOIN item_meanings ON item_meanings.item_id = items.id
+     WHERE items.id != ? ORDER BY items.created_at DESC LIMIT 5000`,
+    [itemId],
+  );
+  return rows
+    .map((row) => ({ row, similarity: similarity(target, unpackVector(row.vector)) }))
+    .filter((r) => r.similarity >= RELATED)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit)
+    .map((r) => toItem(r.row));
 }
 
 // ------------------------------------------------------------ to-dos

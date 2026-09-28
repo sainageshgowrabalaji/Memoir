@@ -17,6 +17,8 @@ export type Query = {
   todosOnly: boolean;
   /** Plain-words labels for what was understood, shown as chips above the results. */
   understood: string[];
+  /** The words left to search by meaning, without names, dates and filler. */
+  meaning: string;
 };
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -48,7 +50,7 @@ const SOURCE_WORDS: [RegExp, Source][] = [
   [/\b(maps?|locations?|address)\b/, 'maps'],
 ];
 
-// A few everyday words mean the same thing. The small model in step 2 widens this by meaning.
+// A few everyday words mean the same thing. The on-phone model (meaning.ts) widens this further.
 const SYNONYMS: Record<string, string[]> = {
   hike: ['hiking', 'trail', 'trek'],
   hiking: ['hike', 'trail', 'trek'],
@@ -195,5 +197,6 @@ export function parseQuery(question: string, now: Date = new Date(), knownPeople
     people,
     todosOnly,
     understood,
+    meaning: words.filter((w) => !people.some((p) => p.toLowerCase() === w)).join(' '),
   };
 }

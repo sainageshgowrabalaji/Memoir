@@ -9,13 +9,20 @@ It runs on iPhone and Android from one codebase, built with Expo and React Nativ
 ## What it does today
 
 - **Save anything.** Paste a link, type a note, pick a photo or take one. The keyboard mic works for speaking a note.
-- **Sorts it for you.** Each save goes on a shelf (People, Work, Money, Health, Learning, Travel, Food, Shopping, Fun, Ideas, Home, Notes) and is marked personal or public. Links from Instagram, YouTube, X, Reddit, LinkedIn, Maps and others are recognized by where they came from.
+- **Sorts it for you.** Each save goes on a shelf (People, Work, Money, Health, Learning, Travel, Food, Shopping, Fun, Ideas, Home, Notes) and is marked personal or public. Keywords decide first, and when there are none the model picks the closest shelf, so "Mortgage rates dropped" lands on Money. Links from Instagram, YouTube, X, Reddit, LinkedIn, Maps and others are recognized by where they came from.
 - **Notices people.** "Amma said..." or "Priya recommended..." files the note under that person, so "what did Amma say" finds it.
 - **Ask in plain words.** "the reel about a hike", "links from last week", "what Ravi sent in May". Search understands time, people, sources and kinds of things, and says what it understood.
+- **Finds things by meaning.** A small model on the phone knows that "a nature walk" is close to "hiking trail near Denver", so you find things even when you don't remember the exact words. Each item's page also shows other things you saved that are like it.
 - **To-dos that keep reminding you.** "I need to renew my passport by Oct 28" becomes a to-do with a due date. Reminders come on the day, then again after 1, 3 and 7 days until you mark it done.
 - **Learns what you care about.** The home screen shows what you save most about and brings back something from your past.
 
-All of this works offline. The understanding is done by small rules on the phone, so nothing you save leaves it.
+All of this works offline. The understanding is done by small rules and a small model on the phone, so nothing you save leaves it.
+
+## The on-phone model
+
+Memoir carries a table of 40,000 everyday English words, each placed by 64 numbers so that words with a similar meaning sit close together. The meaning of a note or a question is the weighted average of its words, and two things are alike when their averages point the same way. It is a file under 4 MB that runs in plain JavaScript, so it works in Expo Go on any iPhone or Android with no special build and no internet.
+
+The word numbers come from [GloVe](https://nlp.stanford.edu/projects/glove/) (Stanford, public domain), taken from the [wink-embeddings-sg-100d](https://github.com/winkjs/wink-embeddings-sg-100d) package and shrunk for phones. See `src/brain/model/NOTICE.md`.
 
 ## Run it on your phone
 
@@ -42,7 +49,7 @@ Reminders work in Expo Go on both platforms. The first time you add a to-do, the
 ## Check the code
 
 ```bash
-npm test            # the sorting, date and search logic, run against a real SQLite database
+npm test            # sorting, dates, search and the model, run against a real SQLite database
 npx tsc --noEmit    # types
 npx expo lint       # lint
 ```
@@ -51,14 +58,13 @@ npx expo lint       # lint
 
 | Folder | What lives there |
 | --- | --- |
-| `src/brain` | Reading a save. Links and where they came from, shelves, people, dates and to-dos, and turning a question into a search. Plain TypeScript with no phone code, so it is tested on its own. |
-| `src/db` | The on-phone SQLite database, with full text search over everything you save. |
+| `src/brain` | Reading a save. Links and where they came from, shelves, people, dates and to-dos, the on-phone model (`meaning.ts`), and turning a question into a search. Plain TypeScript with no phone code, so it is tested on its own. |
+| `src/db` | The on-phone SQLite database, with full text search and the meaning of everything you save. |
 | `src/lib` | Reminders, photos, and the small helpers screens share. |
 | `src/app` | The screens. Memoir (save and browse), Ask, To-dos, and the detail view. |
 | `tests` | Tests for the brain and the database. |
 
 ## What comes next
 
-1. **A small model on the phone.** A compact embedding model (around 25 MB) so Ask finds things by meaning as well as by words. This needs a development build instead of Expo Go.
-2. **Share into Memoir.** Save straight from the share sheet in Instagram, Chrome, Safari or Photos.
-3. **Look it up online.** When the phone is online and you ask for something Memoir does not have, it offers to search the web.
+1. **Share into Memoir.** Save straight from the share sheet in Instagram, Chrome, Safari or Photos. This needs a development build instead of Expo Go.
+2. **Look it up online.** When the phone is online and you ask for something Memoir does not have, it offers to search the web.
