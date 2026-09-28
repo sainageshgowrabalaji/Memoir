@@ -3,6 +3,7 @@ import { Tabs, TabList, TabSlot, TabTrigger, type TabTriggerSlotProps } from 'ex
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/hooks/use-palette';
+import { useToCheckCount } from '@/hooks/use-to-check-count';
 
 function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
   const c = usePalette();
@@ -16,6 +17,7 @@ function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
 
 export default function AppTabs() {
   const c = usePalette();
+  const toCheck = useToCheckCount();
   return (
     <Tabs>
       <TabSlot style={{ flex: 1 }} />
@@ -27,7 +29,7 @@ export default function AppTabs() {
           <TabButton>Ask</TabButton>
         </TabTrigger>
         <TabTrigger name="todos" href="/todos" asChild>
-          <TabButton>To-dos</TabButton>
+          <TabButton>{toCheck ? `Follow up (${toCheck})` : 'Follow up'}</TabButton>
         </TabTrigger>
       </TabList>
     </Tabs>

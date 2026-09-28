@@ -52,6 +52,34 @@ export function domainOf(url: string): string {
   return (match ? match[1] : url).toLowerCase().replace(/^www\./, '').replace(/^m\./, '');
 }
 
+// Share links carry tracking bits ("?igsh=...", "?si=...", "utm_source=...") that change every
+// time you share, so the same reel would look like a new link. These are dropped before comparing.
+const TRACKING = /^(igsh|igshid|si|feature|fbclid|gclid|ref|ref_src|s|t|utm_[a-z]+|share_id|mibextid)$/i;
+
+/** The same link written the same way, so a reel you already saved is recognized. */
+export function sameLinkKey(url: string): string {
+  const m = url.match(/^([a-z]+):\/\/([^/?#]+)([^?#]*)(\?[^#]*)?/i);
+  if (!m) return url.trim().toLowerCase();
+  const host = m[2].toLowerCase().replace(/^(www|m)\./, '');
+  let path = m[3].replace(/\/+$/, '');
+  // Instagram reels and posts have many addresses for one post.
+  const insta = path.match(/\/(?:p|reel|reels|tv)\/([\w-]+)/i);
+  if (host.endsWith('instagram.com') && insta) return `instagram.com/p/${insta[1]}`;
+  const params = (m[4] ?? '')
+    .slice(1)
+    .split('&')
+    .filter((kv) => kv && !TRACKING.test(kv.split('=')[0]))
+    .sort();
+  if (host === 'youtu.be') {
+    return `youtube.com/watch?v=${path.slice(1)}`;
+  }
+  if (host.endsWith('youtube.com') && path.startsWith('/shorts/')) {
+    return `youtube.com/watch?v=${path.slice('/shorts/'.length)}`;
+  }
+  path = path || '/';
+  return `${host}${path}${params.length ? `?${params.join('&')}` : ''}`;
+}
+
 const DOMAIN_SOURCES: [RegExp, Source][] = [
   [/(^|\.)instagram\.com$|(^|\.)instagr\.am$/, 'instagram'],
   [/(^|\.)youtube\.com$|(^|\.)youtu\.be$/, 'youtube'],

@@ -56,6 +56,9 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "description": "Save anything, find it later by asking. A personal diary and to-do list that stays on your phone."
+    "description": "Save anything, find it later by asking. Reels read for you, reminders until you check them, a diary and to-dos. Everything stays on your phone.",
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    }
   }
 }

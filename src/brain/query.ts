@@ -36,7 +36,10 @@ const FILLER = new Set(
 const KIND_WORDS: [RegExp, Kind][] = [
   [/\b(photos?|pics?|pictures?|images?|screenshots?|selfies?)\b/, 'photo'],
   [/\b(links?|urls?|websites?|sites?|articles?|webpages?|pages?)\b/, 'link'],
+  [/\b(diary|journal|entries|entry)\b/, 'diary'],
 ];
+
+const KIND_LABELS: Record<Kind, string> = { photo: 'Photos', link: 'Links', diary: 'Diary', note: 'Notes' };
 
 const SOURCE_WORDS: [RegExp, Source][] = [
   [/\b(instagram|insta|ig|reels?)\b/, 'instagram'],
@@ -151,7 +154,7 @@ export function parseQuery(question: string, now: Date = new Date(), knownPeople
   for (const [pattern, kind] of KIND_WORDS) {
     if (pattern.test(q)) {
       kinds.push(kind);
-      understood.push(kind === 'photo' ? 'Photos' : 'Links');
+      understood.push(KIND_LABELS[kind]);
       q = q.replace(pattern, ' ');
     }
   }

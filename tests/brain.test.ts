@@ -137,3 +137,11 @@ test('"I will" and "I\'m going to" are to-dos too', () => {
   assert.equal(detectTodo("I'll call Ravi on Friday", NOW)?.title, 'Call Ravi');
   assert.equal(detectTodo("I'm going to start running every morning", NOW)?.title, 'Start running every morning');
 });
+
+test('months are not people, and stretches go on the Health shelf', async () => {
+  const { findPeople } = await import('../src/brain/people');
+  const { analyze } = await import('../src/brain/analyze');
+  assert.deepEqual(findPeople('I need to renew my passport by Oct 28'), []);
+  assert.deepEqual(findPeople('Call Ravi on Sat'), ['Ravi']);
+  assert.equal(analyze({ text: '3 stretches for a stiff back after sitting all day' }, NOW).category, 'health');
+});
