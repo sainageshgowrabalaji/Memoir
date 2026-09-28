@@ -11,7 +11,7 @@ import type { Item } from '@/db/repo';
 import { usePalette, useShelfColor } from '@/hooks/use-palette';
 import { timeLabel } from '@/lib/format';
 
-export function ItemCard({ item, matched, showDay }: { item: Item; matched?: string[]; showDay?: string }) {
+export function ItemCard({ item, matched, close, showDay }: { item: Item; matched?: string[]; close?: boolean; showDay?: string }) {
   const c = usePalette();
   const shelf = useShelfColor();
   const extra = item.text.replace(item.url ?? '', '').trim();
@@ -50,13 +50,16 @@ export function ItemCard({ item, matched, showDay }: { item: Item; matched?: str
               {domainOf(item.url)}
             </Text>
           ) : null}
-          {item.people.length || words.length ? (
+          {item.people.length || words.length || close ? (
             <View style={styles.tags}>
               {item.people.map((p) => (
                 <Text key={`p-${p}`} style={[styles.tag, { backgroundColor: c.sunken, color: c.body }]}>
                   {p}
                 </Text>
               ))}
+              {close ? (
+                <Text style={[styles.tag, { backgroundColor: c.accentSoft, color: c.accent }]}>Similar meaning</Text>
+              ) : null}
               {words.map((m) => (
                 <Text key={`m-${m}`} style={[styles.tag, { backgroundColor: c.accentSoft, color: c.accent }]}>
                   {m}

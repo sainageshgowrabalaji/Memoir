@@ -1,6 +1,7 @@
 // The shelves Memoir sorts things onto. You can always move an item to another one.
-// Version 1 sorts by keywords, which works on any phone with no model at all.
-// The small on-phone model in step 2 adds sorting by meaning on top.
+// Keywords decide first. When none match, the small on-phone model compares the note's
+// meaning with each shelf's seed words (see meaning.ts), so "Mortgage rates dropped" lands
+// on Money without the word "money" in it.
 
 import type { Source } from './links';
 
@@ -18,13 +19,22 @@ export type CategoryId =
   | 'home'
   | 'notes';
 
-export type Category = { id: CategoryId; label: string; hint: string; words: string[] };
+export type Category = {
+  id: CategoryId;
+  label: string;
+  hint: string;
+  /** Words that put a note on this shelf when they appear in it. */
+  words: string[];
+  /** Plain, clearly on-topic words that describe the shelf's meaning, for the on-phone model. */
+  seeds: string;
+};
 
 export const CATEGORIES: Category[] = [
   {
     id: 'people',
     label: 'People',
     hint: 'family, friends, birthdays',
+    seeds: 'family mother father sister brother friend wife husband son daughter cousin grandmother wedding birthday kids',
     words: [
       'mom', 'mother', 'mum', 'dad', 'father', 'amma', 'nanna', 'appa', 'sister', 'brother', 'akka', 'anna', 'thammudu',
       'chelli', 'wife', 'husband', 'son', 'daughter', 'friend', 'friends', 'cousin', 'uncle', 'aunt', 'grandma', 'grandpa',
@@ -35,6 +45,7 @@ export const CATEGORIES: Category[] = [
     id: 'work',
     label: 'Work',
     hint: 'job, meetings, career',
+    seeds: 'job office meeting manager colleague project deadline client interview career report presentation hackathon',
     words: [
       'work', 'office', 'meeting', 'manager', 'team', 'project', 'deadline', 'interview', 'job', 'jobs', 'career', 'resume',
       'client', 'standup', 'promotion', 'colleague', 'recruiter', 'offer letter', 'linkedin', 'jira', 'sprint', 'review',
@@ -45,6 +56,7 @@ export const CATEGORIES: Category[] = [
     id: 'money',
     label: 'Money',
     hint: 'bills, cards, savings',
+    seeds: 'money bank loan mortgage credit tax salary invest stocks savings insurance bill payment budget',
     words: [
       'money', 'bank', 'card', 'credit', 'debit', 'loan', 'emi', 'rent', 'bill', 'bills', 'pay', 'paid', 'payment', 'invest',
       'investing', 'stock', 'stocks', 'tax', 'taxes', 'budget', 'savings', 'insurance', 'refund', 'salary', '401k', 'ira',
@@ -55,6 +67,7 @@ export const CATEGORIES: Category[] = [
     id: 'health',
     label: 'Health',
     hint: 'doctors, fitness, sleep',
+    seeds: 'doctor hospital clinic medicine vaccine fitness exercise workout yoga stretching sleep diet dentist physiotherapy',
     words: [
       'doctor', 'hospital', 'clinic', 'medicine', 'medicines', 'pill', 'pills', 'gym', 'workout', 'exercise', 'run', 'running',
       'walk', 'steps', 'sleep', 'diet', 'headache', 'pain', 'dentist', 'health', 'yoga', 'fitness', 'meditation', 'therapy',
@@ -65,6 +78,7 @@ export const CATEGORIES: Category[] = [
     id: 'learning',
     label: 'Learning',
     hint: 'courses, articles, how-tos',
+    seeds: 'learn course tutorial lecture study exam textbook language vocabulary programming research podcast lesson',
     words: [
       'learn', 'learning', 'course', 'tutorial', 'book', 'books', 'read', 'reading', 'article', 'study', 'lecture', 'class',
       'exam', 'paper', 'research', 'how to', 'guide', 'tips', 'python', 'java', 'ai', 'llm', 'agent', 'agents', 'code',
@@ -75,6 +89,7 @@ export const CATEGORIES: Category[] = [
     id: 'travel',
     label: 'Travel',
     hint: 'trips, places to visit',
+    seeds: 'trip travel flight hotel vacation beach resort hiking passport airport tourist island sightseeing',
     words: [
       'trip', 'travel', 'flight', 'flights', 'hotel', 'visit', 'beach', 'hike', 'hiking', 'trail', 'trek', 'mountain',
       'mountains', 'park', 'place', 'places', 'city', 'vacation', 'airbnb', 'airport', 'passport', 'map', 'location',
@@ -85,6 +100,7 @@ export const CATEGORIES: Category[] = [
     id: 'food',
     label: 'Food',
     hint: 'recipes, restaurants',
+    seeds: 'food recipe cooking restaurant dinner lunch breakfast bread baking noodles sushi curry dessert cafe',
     words: [
       'food', 'recipe', 'recipes', 'cook', 'cooking', 'restaurant', 'restaurants', 'cafe', 'coffee', 'dinner', 'lunch',
       'breakfast', 'eat', 'eating', 'dish', 'biryani', 'pizza', 'dosa', 'idli', 'curry', 'dessert', 'cake', 'tea', 'snack',
@@ -95,6 +111,7 @@ export const CATEGORIES: Category[] = [
     id: 'shopping',
     label: 'Shopping',
     hint: 'things to buy, deals',
+    seeds: 'buy purchase shopping sale discount deal store order gift groceries shoes gadget accessories',
     words: [
       'buy', 'bought', 'order', 'ordered', 'amazon', 'flipkart', 'shop', 'shopping', 'price', 'deal', 'deals', 'sale',
       'discount', 'gift', 'gifts', 'product', 'shoes', 'shirt', 'dress', 'laptop', 'phone', 'headphones', 'groceries',
@@ -105,6 +122,7 @@ export const CATEGORIES: Category[] = [
     id: 'fun',
     label: 'Fun',
     hint: 'movies, music, games',
+    seeds: 'movie film music concert band song game sports football basketball comedy series television festival',
     words: [
       'movie', 'movies', 'film', 'series', 'show', 'song', 'songs', 'music', 'watch', 'netflix', 'prime video', 'hotstar',
       'game', 'games', 'concert', 'cricket', 'match', 'funny', 'meme', 'memes', 'dance', 'comedy', 'anime', 'playlist',
@@ -114,6 +132,7 @@ export const CATEGORIES: Category[] = [
     id: 'ideas',
     label: 'Ideas',
     hint: 'thoughts, plans, what-ifs',
+    seeds: 'idea startup plan dream goal inspiration invention project brainstorm vision',
     words: [
       'idea', 'ideas', 'maybe', 'what if', 'could build', 'app idea', 'thought', 'thinking', 'plan', 'startup', 'someday',
       'dream', 'goal', 'goals', 'inspiration', 'side project', 'business',
@@ -123,12 +142,13 @@ export const CATEGORIES: Category[] = [
     id: 'home',
     label: 'Home',
     hint: 'house, chores, repairs',
+    seeds: 'house apartment repair plumber kitchen cleaning laundry furniture vacuum garden rent landlord faucet',
     words: [
       'home', 'house', 'apartment', 'repair', 'clean', 'cleaning', 'laundry', 'furniture', 'plumber', 'electrician', 'lease',
       'landlord', 'move', 'moving', 'wifi', 'kitchen', 'plants', 'garden',
     ],
   },
-  { id: 'notes', label: 'Notes', hint: 'everything else', words: [] },
+  { id: 'notes', label: 'Notes', hint: 'everything else', words: [], seeds: '' },
 ];
 
 export const CATEGORY_BY_ID: Record<CategoryId, Category> = Object.fromEntries(

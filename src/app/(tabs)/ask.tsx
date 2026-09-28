@@ -18,6 +18,7 @@ const EXAMPLES = [
   'What did Amma say about Diwali',
   'Photos from yesterday',
   'The recipe from March',
+  'Something about saving money',
 ];
 
 type Answer = { question: string; query: Query; found: Found[]; loose: boolean };
@@ -122,9 +123,12 @@ export default function AskScreen() {
         data={answer?.found ?? []}
         keyExtractor={(f) => String(f.item.id)}
         ListHeaderComponent={header}
-        renderItem={({ item: f }) => (
+        renderItem={({ item: f, index }) => (
           <View style={styles.cardWrap}>
-            <ItemCard item={f.item} matched={f.matched} showDay={dayLabel(f.item.createdAt)} />
+            {f.close && (index === 0 || !answer?.found[index - 1].close) ? (
+              <Label style={styles.closeLabel}>Close in meaning</Label>
+            ) : null}
+            <ItemCard item={f.item} matched={f.matched} close={f.close} showDay={dayLabel(f.item.createdAt)} />
           </View>
         )}
         contentContainerStyle={styles.content}
@@ -154,4 +158,5 @@ const styles = StyleSheet.create({
   summary: { gap: Space.m },
   count: { fontSize: 18, fontWeight: '700' },
   cardWrap: { marginBottom: Space.s + 2 },
+  closeLabel: { marginTop: Space.m, marginBottom: Space.s },
 });

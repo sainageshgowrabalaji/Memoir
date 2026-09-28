@@ -8,9 +8,10 @@ import type { Scope } from '@/brain/analyze';
 import { CATEGORIES, type CategoryId } from '@/brain/categories';
 import { domainOf, SOURCE_LABELS } from '@/brain/links';
 import { describeDue } from '@/brain/reminders';
+import { ItemCard } from '@/components/item-card';
 import { Body, Button, Chip, Label, Notice } from '@/components/ui';
 import { Fonts, MaxContentWidth, Radius, Space } from '@/constants/theme';
-import { deleteItem, getItem, makeTodo, setTodoDone, todoForItem, updateItem, type Item, type Todo } from '@/db/repo';
+import { deleteItem, getItem, makeTodo, related, setTodoDone, todoForItem, updateItem, type Item, type Todo } from '@/db/repo';
 import { usePalette, useShelfColor } from '@/hooks/use-palette';
 import { useDb } from '@/lib/database';
 import { longDate, timeLabel } from '@/lib/format';
@@ -35,6 +36,7 @@ export default function ItemScreen() {
   const [item, setItem] = useState<Item | null>(null);
   const [todo, setTodo] = useState<Todo | null>(null);
   const [missing, setMissing] = useState(false);
+  const [alike, setAlike] = useState<Item[]>([]);
   const [now, setNow] = useState(0);
 
   const load = useCallback(async () => {
@@ -45,6 +47,7 @@ export default function ItemScreen() {
     }
     setItem(found);
     setTodo(await todoForItem(db, found.id));
+    setAlike(await related(db, found.id));
     setNow(Date.now());
   }, [db, id]);
 
@@ -197,6 +200,15 @@ export default function ItemScreen() {
         </View>
 
         {item.tags.length ? <Notice>Tagged {item.tags.join(', ')}</Notice> : null}
+
+        {alike.length ? (
+          <View style={styles.group}>
+            <Label>Like this</Label>
+            {alike.map((other) => (
+              <ItemCard key={other.id} item={other} showDay={longDate(other.createdAt)} />
+            ))}
+          </View>
+        ) : null}
 
         <Button label="Delete" kind="danger" onPress={() => void remove()} style={[styles.left, { marginTop: Space.l }]} />
       </ScrollView>
