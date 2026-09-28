@@ -71,7 +71,8 @@ export const CATEGORIES: Category[] = [
     words: [
       'doctor', 'hospital', 'clinic', 'medicine', 'medicines', 'pill', 'pills', 'gym', 'workout', 'exercise', 'run', 'running',
       'walk', 'steps', 'sleep', 'diet', 'headache', 'pain', 'dentist', 'health', 'yoga', 'fitness', 'meditation', 'therapy',
-      'blood test', 'checkup', 'vitamin', 'protein', 'calories', 'weight',
+      'blood test', 'checkup', 'vitamin', 'protein', 'calories', 'weight', 'stretch', 'stretches', 'stretching', 'back pain',
+      'posture', 'mobility', 'physio', 'physiotherapy', 'exercises', 'backpain', 'skincare',
     ],
   },
   {
@@ -167,6 +168,14 @@ function escape(word: string) {
   return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Everyday words that hint at a shelf without saying much. "Jersey City" is not a trip, and
+// "show me" is not a TV show, so these count half.
+const WEAK = new Set([
+  'city', 'place', 'places', 'park', 'map', 'location', 'show', 'match', 'order', 'points', 'review', 'class',
+  'paper', 'read', 'run', 'walk', 'steps', 'move', 'called', 'met', 'party', 'plan', 'thought', 'thinking',
+  'maybe', 'clean', 'home', 'work', 'team', 'watch', 'eat', 'tips', 'guide', 'code', 'pay',
+]);
+
 const PATTERNS: { id: CategoryId; pattern: RegExp; word: string }[] = CATEGORIES.flatMap((category) =>
   category.words.map((word) => ({ id: category.id, word, pattern: new RegExp(`\\b${escape(word)}\\b`, 'i') })),
 );
@@ -180,7 +189,7 @@ export function guessCategory(text: string, source: Source = 'me'): CategoryGues
   for (const { id, pattern, word } of PATTERNS) {
     if (pattern.test(text)) {
       // Phrases like "road trip" say more than one word does.
-      scores[id] = (scores[id] ?? 0) + (word.includes(' ') ? 2 : 1);
+      scores[id] = (scores[id] ?? 0) + (word.includes(' ') ? 2 : WEAK.has(word) ? 0.5 : 1);
       (hitsBy[id] ??= []).push(word);
     }
   }

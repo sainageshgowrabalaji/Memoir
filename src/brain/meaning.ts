@@ -111,12 +111,50 @@ export function similarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
   return aa && bb ? dot / Math.sqrt(aa * bb) : 0;
 }
 
-// Saved in the database as 64 small whole numbers in text form, 88 characters per item.
-export const MODEL_VERSION = raw.version;
+// ------------------------------------------------------------ models Memoir can use
+
+/**
+ * Anything that turns text into a meaning. The word model below always works. A neural model
+ * on the phone (src/ai) plugs in the same way when it has been downloaded. Each model has its own
+ * sense of "close", so the thresholds travel with it.
+ */
+export type Meaner = {
+  /** Stored next to each vector, so a different model never compares against the wrong numbers. */
+  readonly id: string;
+  /** The meaning of something you saved. */
+  document(text: string): Promise<Float32Array | null>;
+  /** The meaning of a question. Some models read questions and notes a little differently. */
+  query(text: string): Promise<Float32Array | null>;
+  /** How alike a question and an item must be to show an item that has none of the question's words. */
+  readonly closeAlone: number;
+  /** The same, when the question's words already found other things. */
+  readonly closeBeside: number;
+  /** How alike two items must be to show under "Like this". */
+  readonly related: number;
+};
+
+export const WORD_MODEL_ID = `words-${raw.version}`;
+
+// Unrelated pairs score below 0.4 nineteen times out of twenty with this model.
+export const wordMeaner: Meaner = {
+  id: WORD_MODEL_ID,
+  document: async (text) => embed(text),
+  query: async (text) => embed(text),
+  closeAlone: 0.45,
+  closeBeside: 0.55,
+  related: 0.6,
+};
+
+// Saved in the database as small whole numbers in text form, 4 characters for every 3 numbers.
 
 export function packVector(v: Float32Array): string {
+  // Scaled so the largest number uses the full range. Cosine similarity ignores length, so the
+  // scale itself need not be stored, and small numbers from a 384-number model keep their detail.
+  let largest = 0;
+  for (let d = 0; d < v.length; d++) largest = Math.max(largest, Math.abs(v[d]));
+  const scale = largest ? 127 / largest : 0;
   let bytes = '';
-  for (let d = 0; d < v.length; d++) bytes += String.fromCharCode(Math.round(Math.max(-1, Math.min(1, v[d])) * 127) & 0xff);
+  for (let d = 0; d < v.length; d++) bytes += String.fromCharCode(Math.round(v[d] * scale) & 0xff);
   return btoa(bytes);
 }
 

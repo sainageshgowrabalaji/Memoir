@@ -44,3 +44,14 @@ export function byDay<T extends { createdAt: number }>(items: T[], now = Date.no
   }
   return sections;
 }
+
+/** A time coming up, in words: "today at 8:00 PM", "tomorrow at 8:00 PM", "Saturday at 10:00 AM". */
+export function soonLabel(ts: number, now = Date.now()): string {
+  const days = Math.round((startOfDay(ts) - startOfDay(now)) / DAY);
+  const time = timeLabel(ts);
+  if (days <= 0) return `today at ${time}`;
+  if (days === 1) return `tomorrow at ${time}`;
+  const date = new Date(ts);
+  if (days < 7) return `${date.toLocaleDateString([], { weekday: 'long' })} at ${time}`;
+  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${time}`;
+}

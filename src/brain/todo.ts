@@ -58,9 +58,11 @@ export function detectTodo(text: string, now: Date = new Date()): TodoGuess | nu
     title = title
       .replace(LEAD, '')
       .replace(/\bremind me(?: to)?\b/i, '')
-      .replace(/\b(?:by|on|at|before|in|this|next|coming)\s*$/i, '')
       .replace(/\s{2,}/g, ' ')
-      .replace(/^[\s,:;-]+|[\s,.;:!?-]+$/g, '');
+      .replace(/^[\s,:;-]+|[\s,.;:!?-]+$/g, '')
+      // "book the tickets by Friday" loses "Friday" to the due date, so drop the "by" left behind.
+      .replace(/\s+(?:by|on|at|before|until|till|in|this|next|coming)$/i, '')
+      .replace(/[\s,.;:!?-]+$/g, '');
     if (!title) continue;
 
     return {

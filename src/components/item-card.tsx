@@ -1,5 +1,6 @@
-// One saved thing in a list. Shelf, source and time on top, then the title,
-// a line of the note if it says more, the link's site, a photo, and the people in it.
+// One saved thing in a list. Shelf, source and time on top, then the title, a line of your note
+// (or the reel's caption), the link's site and who posted it, a picture, the people in it, and a
+// "To check" badge until you have looked at a saved link.
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -14,12 +15,15 @@ import { timeLabel } from '@/lib/format';
 export function ItemCard({ item, matched, close, showDay }: { item: Item; matched?: string[]; close?: boolean; showDay?: string }) {
   const c = usePalette();
   const shelf = useShelfColor();
-  const extra = item.text.replace(item.url ?? '', '').trim();
-  const showExtra = extra && extra.toLowerCase() !== item.title.toLowerCase() && !item.title.endsWith('…');
+  const yours = [item.text.replace(item.url ?? '', '').trim(), item.note].filter(Boolean).join(' · ');
+  const extra = yours || item.page.text.replace(/\s+/g, ' ').trim();
+  const showExtra = extra && !extra.toLowerCase().startsWith(item.title.replace(/…$/, '').toLowerCase());
+  const picture = item.photoUri ?? item.page.image;
+  const site = item.url ? [domainOf(item.url), item.page.author].filter(Boolean).join('  ·  ') : '';
   // A matched word that is already one of the people shown would appear twice.
   const names = new Set(item.people.map((p) => p.toLowerCase()));
   const words = (matched ?? []).filter((m) => !names.has(m.toLowerCase()));
-  const meta = [CATEGORY_BY_ID[item.category]?.label ?? 'Notes', item.source !== 'me' ? SOURCE_LABELS[item.source] : null, showDay ?? timeLabel(item.createdAt)]
+  const meta = [item.kind === 'diary' ? 'Diary' : (CATEGORY_BY_ID[item.category]?.label ?? 'Notes'), item.source !== 'me' ? SOURCE_LABELS[item.source] : null, showDay ?? timeLabel(item.createdAt)]
     .filter(Boolean)
     .join('  ·  ');
 
@@ -45,13 +49,16 @@ export function ItemCard({ item, matched, close, showDay }: { item: Item; matche
               {extra}
             </Text>
           ) : null}
-          {item.url ? (
+          {site ? (
             <Text style={[styles.link, { color: c.accent }]} numberOfLines={1}>
-              {domainOf(item.url)}
+              {site}
             </Text>
           ) : null}
-          {item.people.length || words.length || close ? (
+          {item.people.length || words.length || close || item.checkState === 'to_check' ? (
             <View style={styles.tags}>
+              {item.checkState === 'to_check' ? (
+                <Text style={[styles.tag, { backgroundColor: c.warnSoft, color: c.warn }]}>To check</Text>
+              ) : null}
               {item.people.map((p) => (
                 <Text key={`p-${p}`} style={[styles.tag, { backgroundColor: c.sunken, color: c.body }]}>
                   {p}
@@ -68,7 +75,9 @@ export function ItemCard({ item, matched, close, showDay }: { item: Item; matche
             </View>
           ) : null}
         </View>
-        {item.photoUri ? <Image source={{ uri: item.photoUri }} style={styles.thumb} contentFit="cover" transition={150} /> : null}
+        {picture ? (
+          <Image source={{ uri: picture }} style={[styles.thumb, { backgroundColor: c.sunken }]} contentFit="cover" transition={150} />
+        ) : null}
       </View>
     </Pressable>
   );
@@ -86,5 +95,5 @@ const styles = StyleSheet.create({
   link: { fontSize: 13.5, fontWeight: '500' },
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
   tag: { fontSize: 12.5, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, overflow: 'hidden' },
-  thumb: { width: 64, height: 64, borderRadius: Radius.s },
+  thumb: { width: 64, height: 80, borderRadius: Radius.s },
 });

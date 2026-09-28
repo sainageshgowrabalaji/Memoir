@@ -93,7 +93,7 @@ test('things saved before the model existed get a meaning when the app opens', a
 test('deleting an item deletes its meaning too', async () => {
   const db = await seeded();
   await deleteItem(db, 5);
-  const row = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM item_meanings WHERE item_id = 5');
+  const row = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM item_vectors WHERE item_id = 5');
   assert.equal(Number(row?.n), 0);
   assert.deepEqual(await related(db, 1), []);
 });

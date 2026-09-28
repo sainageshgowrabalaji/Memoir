@@ -8,7 +8,8 @@ import { capitalize, findUrls, linkTitle, sourceOf, SOCIAL, type Source } from '
 import { embed, shelfByMeaning } from './meaning';
 import { detectTodo, type TodoGuess } from './todo';
 
-export type Kind = 'note' | 'link' | 'photo';
+/** `diary` is your day in your own words, one entry per day. */
+export type Kind = 'note' | 'link' | 'photo' | 'diary';
 export type Scope = 'personal' | 'public';
 
 export type Capture = { text: string; photoUri?: string | null };
