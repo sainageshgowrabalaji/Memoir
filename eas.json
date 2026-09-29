@@ -6,6 +6,13 @@
   "build": {
     "production": {
       "channel": "main"
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "main",
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {
