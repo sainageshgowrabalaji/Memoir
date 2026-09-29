@@ -56,7 +56,7 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "description": "Save anything, find it later by asking. Reels read for you, reminders until you check them, a diary and to-dos. Everything stays on your phone.",
+    "description": "A calm personal assistant on your phone. Tell it anything by typing or with the keyboard mic. Reminders, to-dos, lists, habits, a diary and notes, all offline and private.",
     "runtimeVersion": {
       "policy": "sdkVersion"
     }

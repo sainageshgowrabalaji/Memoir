@@ -1,16 +1,18 @@
-// Phone reminders for to-dos and for saved links still to check. They are local notifications,
-// scheduled on the phone itself, so they fire with no internet and no server. They work in Expo Go.
+// Phone reminders: to-dos until they are done, habits at their time, a morning brief and an evening
+// diary nudge. They are local notifications, scheduled on the phone itself, so they fire with no
+// internet and no server. They work in Expo Go.
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-import { diaryNudges, digestMessage, planCheckDigests, planReminders } from '@/brain/reminders';
-import { diaryFor, getSetting, openTodosForReminders, toCheckForReminders } from '@/db/repo';
+import { diaryNudges, habitReminders, morningBriefs, planReminders } from '@/brain/reminders';
+import { habitsToday } from '@/db/assistant';
+import { diaryFor, getSetting, openTodosForReminders } from '@/db/repo';
 import type { Db } from '@/db/schema';
 
 const CHANNEL = 'reminders';
-// iPhone keeps at most 64 waiting notifications per app. Links to check get up to 14 evenings.
+// iPhone keeps at most 64 waiting notifications per app. The soonest 60 are scheduled, and the
+// rest are topped up each time the app opens.
 const MAX_WAITING = 60;
-const MAX_CHECK_DIGESTS = 14;
 let configured = false;
 
 export function configureNotifications() {
@@ -44,44 +46,51 @@ export async function askForReminders(): Promise<boolean> {
   return status.granted;
 }
 
+type Planned = { at: number; title: string; body: string; url: string };
+
+/** Everything that should remind you in the coming days, soonest first. Pure, apart from reading. */
+export async function planAll(db: Db, now = Date.now()): Promise<Planned[]> {
+  const todos = await openTodosForReminders(db);
+  const habits = await habitsToday(db, new Date(now));
+  const brief = (await getSetting(db, 'morning_brief', 'on')) === 'on';
+  const planned: Planned[] = [];
+
+  // With the morning brief on, to-dos without a date are named in it instead of each nudging alone.
+  for (const r of planReminders(brief ? todos.filter((t) => t.dueAt !== null) : todos, now)) {
+    planned.push({
+      at: r.at,
+      title: r.overdue ? `Still open, ${r.title}` : r.title,
+      body: r.overdue ? 'Tick it in Memoir once it is done, and the reminders stop.' : 'A reminder from Memoir.',
+      url: '/tasks',
+    });
+  }
+  for (const h of habitReminders(habits, now)) {
+    planned.push({ at: h.at, title: h.title, body: 'Your habit for today. Tick it on Today when it is done.', url: '/' });
+  }
+  if (brief) {
+    for (const b of morningBriefs(todos, habits, now)) planned.push({ ...b, url: '/' });
+  }
+  if ((await getSetting(db, 'diary_nudge', 'on')) === 'on') {
+    for (const at of diaryNudges(now, Boolean(await diaryFor(db, new Date(now))))) {
+      planned.push({ at, title: 'How was your day?', body: 'Tell Memoir in a line or two. The keyboard mic works too.', url: '/' });
+    }
+  }
+  return planned.sort((a, b) => a.at - b.at).slice(0, MAX_WAITING);
+}
+
 /**
- * Rebuilds every reminder from the to-do list and the links still to check. Simpler and safer than
- * keeping track of each one: whatever is open gets reminders, whatever is done gets none.
+ * Rebuilds every reminder from what is open right now. Simpler and safer than keeping track of
+ * each one: whatever is open gets reminders, whatever is done gets none.
  */
 export async function syncReminders(db: Db, now = Date.now()): Promise<number> {
   if (!(await remindersAllowed())) return 0;
+  const planned = await planAll(db, now);
   await Notifications.cancelAllScheduledNotificationsAsync();
-  const digests = planCheckDigests(await toCheckForReminders(db), now, MAX_CHECK_DIGESTS);
-  const diary = (await getSetting(db, 'diary_nudge', 'on')) === 'on' ? diaryNudges(now, Boolean(await diaryFor(db, new Date(now)))) : [];
-  const todos = planReminders(await openTodosForReminders(db), now).slice(0, MAX_WAITING - digests.length - diary.length);
-  const trigger = (at: number) => ({
-    type: Notifications.SchedulableTriggerInputTypes.DATE,
-    date: new Date(at),
-    channelId: CHANNEL,
-  }) as const;
-
-  for (const digest of digests) {
-    const { title, body } = digestMessage(digest);
+  for (const p of planned) {
     await Notifications.scheduleNotificationAsync({
-      content: { title, body, data: { url: '/todos', kind: 'check' } },
-      trigger: trigger(digest.at),
+      content: { title: p.title, body: p.body, data: { url: p.url } },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(p.at), channelId: CHANNEL },
     });
   }
-  for (const at of diary) {
-    await Notifications.scheduleNotificationAsync({
-      content: { title: 'How was your day?', body: 'Write a line in Memoir. Even one sentence is enough.', data: { url: '/', kind: 'diary' } },
-      trigger: trigger(at),
-    });
-  }
-  for (const reminder of todos) {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: reminder.overdue ? `Still on your list: ${reminder.title}` : reminder.title,
-        body: reminder.overdue ? 'Mark it done in Memoir once it is, and the reminders stop.' : 'A reminder from Memoir.',
-        data: { todoId: reminder.todoId, url: '/todos' },
-      },
-      trigger: trigger(reminder.at),
-    });
-  }
-  return digests.length + diary.length + todos.length;
+  return planned.length;
 }

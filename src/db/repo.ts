@@ -1,22 +1,15 @@
-// Saving, listing, searching, following up and to-dos. Every function takes the database as its
+// Saving, listing, searching, the diary and to-dos. Every function takes the database as its
 // first argument, like a DAO in Java, so the same code runs on the phone and in tests.
 
 import { analyze, meaningText, type Capture, type Kind, type Scope } from '../brain/analyze';
-import { guessCategory, type CategoryId } from '../brain/categories';
-import { domainOf, findUrls, sameLinkKey, type Source } from '../brain/links';
-import { shelfByMeaning, similarity, packVector, unpackVector, wordMeaner, WORD_MODEL_ID, type Meaner } from '../brain/meaning';
-import type { ImportedLink } from '../brain/imports';
-import { hashtagsOf, pageHeadline, type PageInfo } from '../brain/pages';
+import type { CategoryId } from '../brain/categories';
+import type { Source } from '../brain/links';
+import { similarity, packVector, unpackVector, wordMeaner, WORD_MODEL_ID, type Meaner } from '../brain/meaning';
 import type { Query } from '../brain/query';
-import { firstEvening, type OpenTodo, type ToCheck } from '../brain/reminders';
+import type { OpenTodo } from '../brain/reminders';
 import { SEARCH_WEIGHTS, type Db } from './schema';
 
-/**
- * Whether a saved link still needs a look. `none` is for notes and photos, which need nothing.
- * `backlog` is for old saves brought in from WhatsApp or Instagram, which come back a few a day.
- */
-export type CheckState = 'none' | 'to_check' | 'checked' | 'backlog';
-/** Reading the link's page: not a link, waiting for the internet, read, or could not be read. */
+/** Pages read for links saved by older versions of Memoir. */
 export type PageStatus = 'none' | 'pending' | 'read' | 'failed';
 
 export type Item = {
@@ -36,12 +29,10 @@ export type Item = {
   scope: Scope;
   people: string[];
   tags: string[];
-  /** What the link's page said, exactly as written there. */
+  /** What a link's page said, for links saved by older versions. */
   page: { title: string; text: string; author: string; image: string | null; status: PageStatus };
-  checkState: CheckState;
-  /** "Remind me later" pushed the next nudge to this time. */
-  checkAfter: number | null;
-  checkedAt: number | null;
+  /** The words behind a reminder. Searchable, but not listed with your notes. */
+  hidden: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -53,6 +44,8 @@ export type Todo = {
   dueAt: number | null;
   doneAt: number | null;
   createdAt: number;
+  /** Comes back after it is ticked: weekly, monthly or yearly. */
+  repeat?: string | null;
 };
 
 type ItemRow = {
@@ -75,14 +68,12 @@ type ItemRow = {
   page_image: string | null;
   page_status: PageStatus;
   page_tries: number;
-  check_state: CheckState;
-  check_after: number | null;
-  checked_at: number | null;
+  hidden?: number;
   created_at: number;
   updated_at: number;
 };
 
-type TodoRow = { id: number; item_id: number | null; title: string; due_at: number | null; done_at: number | null; created_at: number };
+type TodoRow = { id: number; item_id: number | null; title: string; due_at: number | null; done_at: number | null; created_at: number; repeat?: string | null };
 
 function list(json: string): string[] {
   try {
@@ -115,16 +106,14 @@ export function toItem(row: ItemRow): Item {
       image: row.page_image ?? null,
       status: row.page_status ?? 'none',
     },
-    checkState: row.check_state ?? 'none',
-    checkAfter: row.check_after ?? null,
-    checkedAt: row.checked_at ?? null,
+    hidden: Boolean(row.hidden),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 function toTodo(row: TodoRow): Todo {
-  return { id: row.id, itemId: row.item_id, title: row.title, dueAt: row.due_at, doneAt: row.done_at, createdAt: row.created_at };
+  return { id: row.id, itemId: row.item_id, title: row.title, dueAt: row.due_at, doneAt: row.done_at, createdAt: row.created_at, repeat: row.repeat ?? null };
 }
 
 // ------------------------------------------------------------ meanings
@@ -175,41 +164,17 @@ export async function fillMeanings(db: Db, meaner: Meaner = wordMeaner, onProgre
 
 // ------------------------------------------------------------ saving
 
-/** `duplicate` means you had already saved this link, so it was put back on "To check" instead. */
-export type Saved = { item: Item; todo: Todo | null; duplicate?: boolean };
+export type Saved = { item: Item; todo: Todo | null };
 
-/** A link you already saved, however it was shared (with or without "?igsh=", youtu.be or youtube.com). */
-export async function findSavedLink(db: Db, url: string): Promise<Item | null> {
-  const key = sameLinkKey(url);
-  const rows = await db.getAllAsync<ItemRow>('SELECT * FROM items WHERE url IS NOT NULL AND url LIKE ? ORDER BY created_at DESC LIMIT 500', [
-    `%${domainOf(url).split('.').slice(-2)[0]}%`,
-  ]);
-  const found = rows.find((row) => row.url && sameLinkKey(row.url) === key);
-  return found ? toItem(found) : null;
-}
-
-/**
- * Save anything. `asTodo` forces a to-do even without words like "I want to". A saved link
- * starts as "to check", and its page is read in the background (see readPages).
- */
+/** Save a note. `asTodo` forces a to-do even without words like "I want to". */
 export async function saveCapture(db: Db, capture: Capture, now = new Date(), asTodo = false, meaner: Meaner = wordMeaner): Promise<Saved> {
   const a = analyze(capture, now);
   const at = now.getTime();
-  const isLink = a.kind === 'link';
-  // Saving the same reel again (just the link) brings the first one back instead of a copy.
-  if (isLink && !capture.photoUri && a.url && capture.text.trim().replace(a.url, '').trim() === '') {
-    const existing = await findSavedLink(db, a.url);
-    if (existing) {
-      await remindLater(db, existing.id, firstEvening(at));
-      return { item: (await getItem(db, existing.id))!, todo: null, duplicate: true };
-    }
-  }
   const { lastInsertRowId: id } = await db.runAsync(
-    `INSERT INTO items (kind, title, text, url, source, photo_uri, category, scope, people, tags,
-       page_status, check_state, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO items (kind, title, text, url, source, photo_uri, category, scope, people, tags, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [a.kind, a.title, a.text, a.url, a.source, capture.photoUri ?? null, a.category, a.scope,
-      JSON.stringify(a.people), JSON.stringify(a.tags), isLink ? 'pending' : 'none', isLink ? 'to_check' : 'none', at, at],
+      JSON.stringify(a.people), JSON.stringify(a.tags), at, at],
   );
   let todo: Todo | null = null;
   const todoGuess = a.todo ?? (asTodo ? { title: a.title, dueAt: null, dateText: null } : null);
@@ -223,70 +188,6 @@ export async function saveCapture(db: Db, capture: Capture, now = new Date(), as
   if (!item) throw new Error('The item was not saved.');
   await refreshMeaning(db, item, meaner);
   return { item, todo };
-}
-
-// ------------------------------------------------------------ reading links
-
-/** Links whose page has not been read yet, newest first. Each gets a few tries before Memoir stops. */
-export async function pendingPages(db: Db, limit = 8): Promise<Item[]> {
-  const rows = await db.getAllAsync<ItemRow>(
-    `SELECT * FROM items WHERE url IS NOT NULL AND page_status IN ('pending', 'failed') AND page_tries < 4
-     ORDER BY check_state = 'to_check' DESC, created_at DESC LIMIT ?`,
-    [limit],
-  );
-  return rows.map(toItem);
-}
-
-/** The words you typed besides the link. Empty when you saved just the link. */
-function yourWords(item: Item): string {
-  return findUrls(item.text).reduce((rest, u) => rest.replace(u, ' '), item.text).trim();
-}
-
-/**
- * Stores what a link's page said. A link saved on its own gets the page's headline as its title
- * and is moved to the shelf the caption fits, unless you already moved it yourself.
- * `page` null means the page could not be read this time.
- */
-export async function applyPage(db: Db, id: number, page: PageInfo | null, now = new Date(), meaner: Meaner = wordMeaner): Promise<Item | null> {
-  const item = await getItem(db, id);
-  if (!item) return null;
-  if (!page) {
-    await db.runAsync("UPDATE items SET page_status = 'failed', page_tries = page_tries + 1 WHERE id = ?", [id]);
-    return getItem(db, id);
-  }
-
-  const mine = yourWords(item);
-  const headline = pageHeadline(page);
-  // A few words of your own ("for the interview prep") say why, not what. The page's headline
-  // becomes the title, and your words stay on the card and the item's page.
-  const shortNote = mine.split(/\s+/).length <= 6 && item.title.toLowerCase() === mine.split('\n')[0].trim().toLowerCase();
-  const title = headline && (!mine || shortNote) ? headline : item.title;
-  const tags = [...new Set([...item.tags, ...hashtagsOf(page.text)])].slice(0, 8);
-
-  let category = item.category;
-  if (!item.categoryLocked && (!mine || category === 'notes')) {
-    const guess = guessCategory(`${mine} ${page.title} ${page.text}`, item.source).id;
-    if (guess !== 'notes') category = guess;
-    else {
-      const meaning = await wordMeaner.document(`${mine} ${page.title} ${page.text}`);
-      category = (meaning && shelfByMeaning(meaning)?.id) || category;
-    }
-  }
-
-  await db.runAsync(
-    `UPDATE items SET page_title = ?, page_text = ?, page_author = ?, page_image = ?, page_status = 'read',
-       page_tries = page_tries + 1, page_read_at = ?, title = ?, tags = ?, category = ?, updated_at = ? WHERE id = ?`,
-    [page.title.slice(0, 300), page.text.slice(0, 4000), page.author.slice(0, 120), page.image, now.getTime(), title,
-      JSON.stringify(tags), category, now.getTime(), id],
-  );
-  const updated = await getItem(db, id);
-  if (updated) await refreshMeaning(db, updated, meaner);
-  return updated;
-}
-
-/** Try reading a link's page again, as if it were just saved. */
-export async function retryPage(db: Db, id: number) {
-  await db.runAsync("UPDATE items SET page_status = 'pending', page_tries = 0 WHERE id = ? AND url IS NOT NULL", [id]);
 }
 
 // ------------------------------------------------------------ reading
@@ -325,6 +226,15 @@ export async function listItems(db: Db, filter: ListFilter = {}): Promise<Item[]
   return rows.map(toItem);
 }
 
+/** Your notes, newest first: not the diary, and not the words behind a reminder. */
+export async function listNotes(db: Db, limit = 100): Promise<Item[]> {
+  const rows = await db.getAllAsync<ItemRow>(
+    "SELECT * FROM items WHERE kind != 'diary' AND hidden = 0 ORDER BY created_at DESC LIMIT ?",
+    [limit],
+  );
+  return rows.map(toItem);
+}
+
 export async function knownPeople(db: Db): Promise<string[]> {
   const rows = await db.getAllAsync<{ people: string }>("SELECT people FROM items WHERE people != '[]'");
   return [...new Set(rows.flatMap((r) => list(r.people)))];
@@ -350,67 +260,6 @@ export async function fromYourPast(db: Db, now = new Date()): Promise<Item | nul
   const day = Math.floor(now.getTime() / (24 * 60 * 60 * 1000));
   const row = await db.getFirstAsync<ItemRow>('SELECT * FROM items WHERE created_at < ? ORDER BY id LIMIT 1 OFFSET ?', [weekAgo, day % n]);
   return row ? toItem(row) : null;
-}
-
-/** What you have been into lately: shelves, hashtags and accounts you save most, last 30 days. */
-export async function interests(db: Db, now = new Date()): Promise<{ shelves: CategoryId[]; tags: string[]; authors: string[] }> {
-  const since = now.getTime() - 30 * 24 * 60 * 60 * 1000;
-  const rows = await db.getAllAsync<{ category: CategoryId; tags: string; page_author: string }>(
-    "SELECT category, tags, page_author FROM items WHERE created_at >= ? AND kind != 'diary'",
-    [since],
-  );
-  const count = (values: string[]) => {
-    const tally = new Map<string, number>();
-    for (const v of values) if (v) tally.set(v, (tally.get(v) ?? 0) + 1);
-    return [...tally.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).map(([v]) => v);
-  };
-  return {
-    shelves: count(rows.map((r) => r.category).filter((cat) => cat !== 'notes')).slice(0, 3) as CategoryId[],
-    tags: count(rows.flatMap((r) => list(r.tags))).slice(0, 5),
-    authors: count(rows.map((r) => r.page_author)).slice(0, 3),
-  };
-}
-
-// ------------------------------------------------------------ following up
-
-/** Saved links still waiting for a look. Due ones first (oldest waiting at the top), then later ones. */
-export async function listToCheck(db: Db, now = new Date()): Promise<{ due: Item[]; later: Item[] }> {
-  const rows = await db.getAllAsync<ItemRow>(
-    "SELECT * FROM items WHERE check_state = 'to_check' ORDER BY COALESCE(check_after, created_at) ASC",
-  );
-  const items = rows.map(toItem);
-  const t = now.getTime();
-  return {
-    due: items.filter((i) => !i.checkAfter || i.checkAfter <= t),
-    later: items.filter((i) => i.checkAfter && i.checkAfter > t),
-  };
-}
-
-export async function countToCheck(db: Db): Promise<number> {
-  const row = await db.getFirstAsync<{ n: number }>("SELECT COUNT(*) AS n FROM items WHERE check_state = 'to_check'");
-  return Number(row?.n ?? 0);
-}
-
-export async function toCheckForReminders(db: Db): Promise<ToCheck[]> {
-  const rows = await db.getAllAsync<{ id: number; title: string; created_at: number; check_after: number | null; source: string }>(
-    "SELECT id, title, created_at, check_after, source FROM items WHERE check_state = 'to_check'",
-  );
-  return rows.map((r) => ({ id: r.id, title: r.title, createdAt: r.created_at, checkAfter: r.check_after, source: r.source }));
-}
-
-/** Checked (you opened it, or said it's done) or back on the list. */
-export async function setChecked(db: Db, id: number, checked: boolean, now = new Date()) {
-  await db.runAsync(
-    checked
-      ? "UPDATE items SET check_state = 'checked', checked_at = ?, check_after = NULL WHERE id = ?"
-      : "UPDATE items SET check_state = 'to_check', checked_at = NULL, check_after = NULL WHERE id = ?",
-    checked ? [now.getTime(), id] : [id],
-  );
-}
-
-/** "Remind me later": back on the list, with the next nudge at `at`. Works on anything you saved. */
-export async function remindLater(db: Db, id: number, at: number) {
-  await db.runAsync("UPDATE items SET check_state = 'to_check', check_after = ?, checked_at = NULL WHERE id = ?", [at, id]);
 }
 
 // ------------------------------------------------------------ diary
@@ -483,65 +332,6 @@ export async function setSetting(db: Db, key: string, value: string) {
   await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [`setting:${key}`, value]);
 }
 
-// ------------------------------------------------------------ old saves from other apps
-
-/**
- * Brings in links from a WhatsApp or Instagram export. Links already saved are skipped. The rest
- * wait in a backlog and come back a few each evening (see promoteBacklog), instead of all at once.
- */
-export async function importLinks(
-  db: Db,
-  links: ImportedLink[],
-  now = new Date(),
-  meaner: Meaner = wordMeaner,
-): Promise<{ added: number; skipped: number }> {
-  let added = 0;
-  let skipped = 0;
-  for (const link of links) {
-    if (await findSavedLink(db, link.url)) {
-      skipped++;
-      continue;
-    }
-    const at = new Date(Math.min(link.at ?? now.getTime(), now.getTime()));
-    const { item } = await saveCapture(db, { text: link.note ? `${link.url}\n${link.note}` : link.url }, at, false, meaner);
-    await db.runAsync("UPDATE items SET check_state = 'backlog', page_author = ? WHERE id = ?", [link.author, item.id]);
-    added++;
-  }
-  return { added, skipped };
-}
-
-export async function countBacklog(db: Db): Promise<number> {
-  const row = await db.getFirstAsync<{ n: number }>("SELECT COUNT(*) AS n FROM items WHERE check_state = 'backlog'");
-  return Number(row?.n ?? 0);
-}
-
-export const BACKLOG_PER_DAY = 3;
-
-/**
- * Moves a few old saves onto "To check" each day, newest first, so the backlog gets looked at
- * without flooding you. `force` brings the next few right now.
- */
-export async function promoteBacklog(db: Db, now = new Date(), force = false): Promise<number> {
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const key = String(today.getTime());
-  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM meta WHERE key = 'backlog_day'");
-  const [day, doneToday] = (row?.value ?? '').split(':');
-  const already = day === key ? Number(doneToday) || 0 : 0;
-  const room = force ? BACKLOG_PER_DAY : BACKLOG_PER_DAY - already;
-  if (room <= 0) return 0;
-  const picks = await db.getAllAsync<{ id: number }>(
-    "SELECT id FROM items WHERE check_state = 'backlog' ORDER BY created_at DESC LIMIT ?",
-    [room],
-  );
-  const evening = firstEvening(now.getTime());
-  for (const pick of picks) {
-    await db.runAsync("UPDATE items SET check_state = 'to_check', check_after = ? WHERE id = ?", [force ? null : evening, pick.id]);
-  }
-  await db.runAsync("INSERT OR REPLACE INTO meta (key, value) VALUES ('backlog_day', ?)", [`${key}:${already + picks.length}`]);
-  return picks.length;
-}
-
 // ------------------------------------------------------------ changing
 
 export async function updateItem(db: Db, id: number, patch: { category?: CategoryId; scope?: Scope }, now = new Date()) {
@@ -567,6 +357,20 @@ export async function setNote(db: Db, id: number, note: string, now = new Date()
   await db.runAsync('UPDATE items SET note = ?, updated_at = ? WHERE id = ?', [note.trim(), now.getTime(), id]);
   const item = await getItem(db, id);
   if (item) await refreshMeaning(db, item, meaner);
+}
+
+/** Your own words changed: the title, people and meaning follow. */
+export async function updateText(db: Db, id: number, text: string, now = new Date(), meaner: Meaner = wordMeaner) {
+  const item = await getItem(db, id);
+  const clean = text.trim();
+  if (!item || !clean) return;
+  const a = analyze({ text: clean }, new Date(item.createdAt));
+  const title = item.kind === 'diary' ? item.title : a.title;
+  await db.runAsync('UPDATE items SET text = ?, title = ?, people = ?, updated_at = ? WHERE id = ?', [
+    clean, title, JSON.stringify(a.people), now.getTime(), id,
+  ]);
+  const updated = await getItem(db, id);
+  if (updated) await refreshMeaning(db, updated, meaner);
 }
 
 /** Deletes an item and its to-do. Returns the photo file so the caller can delete it too. */
@@ -757,12 +561,45 @@ export async function openTodosForReminders(db: Db): Promise<OpenTodo[]> {
   return (await listTodos(db, true)).map((t) => ({ id: t.id, title: t.title, dueAt: t.dueAt, createdAt: t.createdAt }));
 }
 
-export async function setTodoDone(db: Db, id: number, done: boolean, now = new Date()) {
+/**
+ * Ticks a to-do. One that repeats (rent every month, a birthday every year) comes straight back
+ * for its next date. Returns the id of that next one, if any.
+ */
+export async function setTodoDone(db: Db, id: number, done: boolean, now = new Date()): Promise<number | null> {
   await db.runAsync('UPDATE todos SET done_at = ? WHERE id = ?', [done ? now.getTime() : null, id]);
+  if (!done) return null;
+  const row = await db.getFirstAsync<{ item_id: number | null; title: string; due_at: number | null; repeat: string | null }>(
+    'SELECT item_id, title, due_at, repeat FROM todos WHERE id = ?',
+    [id],
+  );
+  if (!row?.repeat || row.due_at === null) return null;
+  const next = new Date(row.due_at);
+  do {
+    if (row.repeat === 'weekly') next.setDate(next.getDate() + 7);
+    else if (row.repeat === 'monthly') next.setMonth(next.getMonth() + 1);
+    else next.setFullYear(next.getFullYear() + 1);
+  } while (next.getTime() <= now.getTime());
+  const { lastInsertRowId } = await db.runAsync('INSERT INTO todos (item_id, title, due_at, done_at, created_at, repeat) VALUES (?, ?, ?, NULL, ?, ?)', [
+    row.item_id, row.title, next.getTime(), now.getTime(), row.repeat,
+  ]);
+  return lastInsertRowId;
 }
 
 export async function setTodoDue(db: Db, id: number, dueAt: number | null) {
   await db.runAsync('UPDATE todos SET due_at = ? WHERE id = ?', [dueAt, id]);
+}
+
+/** Deletes a to-do. The words behind it go too, unless they are a note or diary of their own. */
+export async function deleteTodo(db: Db, id: number) {
+  const row = await db.getFirstAsync<{ item_id: number | null }>('SELECT item_id FROM todos WHERE id = ?', [id]);
+  await db.runAsync('DELETE FROM todos WHERE id = ?', [id]);
+  if (!row?.item_id) return;
+  const others = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM todos WHERE item_id = ?', [row.item_id]);
+  const item = await db.getFirstAsync<{ hidden: number }>('SELECT hidden FROM items WHERE id = ?', [row.item_id]);
+  if (item?.hidden && !Number(others?.n)) {
+    await db.runAsync('DELETE FROM item_vectors WHERE item_id = ?', [row.item_id]);
+    await db.runAsync('DELETE FROM items WHERE id = ?', [row.item_id]);
+  }
 }
 
 export async function makeTodo(db: Db, item: Item, now = new Date()): Promise<Todo> {
@@ -782,17 +619,42 @@ export async function todoForItem(db: Db, itemId: number): Promise<Todo | null> 
 
 const ITEM_COLUMNS = [
   'kind', 'title', 'text', 'note', 'url', 'source', 'photo_uri', 'category', 'category_locked', 'scope', 'people', 'tags',
-  'page_title', 'page_text', 'page_author', 'page_image', 'page_status', 'page_tries', 'page_read_at',
-  'check_state', 'check_after', 'checked_at', 'created_at', 'updated_at',
+  'page_title', 'page_text', 'page_author', 'page_image', 'page_status', 'page_tries', 'page_read_at', 'hidden',
+  'created_at', 'updated_at',
 ] as const;
 
-export type BackupData = { app: 'memoir'; version: 1; exportedAt: number; items: Record<string, unknown>[]; todos: Record<string, unknown>[] };
+type Rows = Record<string, unknown>[];
+
+/**
+ * Version 2 also carries lists, habits with their ticks, and what Memoir learned about the way you
+ * talk. Version 1 files (notes, diary and to-dos only) still restore.
+ */
+export type BackupData = {
+  app: 'memoir';
+  version: 1 | 2;
+  exportedAt: number;
+  items: Rows;
+  todos: Rows;
+  lists?: Rows;
+  habits?: Rows;
+  habitLogs?: Rows;
+  meta?: Rows;
+};
 
 /** Everything you saved, as plain data. Meanings are left out because they are worked out again. */
 export async function exportData(db: Db, now = new Date()): Promise<BackupData> {
-  const items = await db.getAllAsync<Record<string, unknown>>('SELECT * FROM items ORDER BY id');
-  const todos = await db.getAllAsync<Record<string, unknown>>('SELECT * FROM todos ORDER BY id');
-  return { app: 'memoir', version: 1, exportedAt: now.getTime(), items, todos };
+  const all = (sql: string) => db.getAllAsync<Record<string, unknown>>(sql);
+  return {
+    app: 'memoir',
+    version: 2,
+    exportedAt: now.getTime(),
+    items: await all('SELECT * FROM items ORDER BY id'),
+    todos: await all('SELECT * FROM todos ORDER BY id'),
+    lists: await all('SELECT * FROM list_items ORDER BY id'),
+    habits: await all('SELECT * FROM habits ORDER BY id'),
+    habitLogs: await all('SELECT * FROM habit_logs'),
+    meta: await all("SELECT * FROM meta WHERE key = 'learned' OR key LIKE 'setting:%' OR key = 'habit_suggestion_dismissed'"),
+  };
 }
 
 export function isBackup(value: unknown): value is BackupData {
@@ -836,9 +698,37 @@ export async function importData(
     const itemId = row.item_id === null || row.item_id === undefined ? null : (newIds.get(Number(row.item_id)) ?? null);
     const same = await db.getFirstAsync<{ id: number }>('SELECT id FROM todos WHERE created_at = ? AND title = ?', [row.created_at, row.title]);
     if (same) continue;
-    await db.runAsync('INSERT INTO todos (item_id, title, due_at, done_at, created_at) VALUES (?, ?, ?, ?, ?)', [
-      itemId, row.title, row.due_at ?? null, row.done_at ?? null, row.created_at,
+    await db.runAsync('INSERT INTO todos (item_id, title, due_at, done_at, created_at, repeat) VALUES (?, ?, ?, ?, ?, ?)', [
+      itemId, row.title, row.due_at ?? null, row.done_at ?? null, row.created_at, row.repeat ?? null,
     ]);
+    added++;
+  }
+  for (const row of backup.lists ?? []) {
+    const same = await db.getFirstAsync<{ id: number }>('SELECT id FROM list_items WHERE created_at = ? AND text = ? AND list = ?', [row.created_at, row.text, row.list]);
+    if (same) continue;
+    await db.runAsync('INSERT INTO list_items (list, text, done_at, created_at) VALUES (?, ?, ?, ?)', [row.list, row.text, row.done_at ?? null, row.created_at]);
+    added++;
+  }
+  const habitIds = new Map<number, number>();
+  for (const row of backup.habits ?? []) {
+    const same = await db.getFirstAsync<{ id: number }>('SELECT id FROM habits WHERE created_at = ? AND name = ?', [row.created_at, row.name]);
+    if (same) {
+      habitIds.set(Number(row.id), same.id);
+      continue;
+    }
+    const { lastInsertRowId } = await db.runAsync('INSERT INTO habits (name, days, hour, minute, archived, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
+      row.name, row.days ?? '[0,1,2,3,4,5,6]', row.hour ?? null, row.minute ?? 0, row.archived ?? 0, row.created_at,
+    ]);
+    habitIds.set(Number(row.id), lastInsertRowId);
+    added++;
+  }
+  for (const row of backup.habitLogs ?? []) {
+    const habitId = habitIds.get(Number(row.habit_id));
+    if (habitId) await db.runAsync('INSERT OR IGNORE INTO habit_logs (habit_id, day) VALUES (?, ?)', [habitId, row.day]);
+  }
+  for (const row of backup.meta ?? []) {
+    // Settings and what it learned come back only when this phone has none of its own yet.
+    await db.runAsync('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)', [row.key, row.value]);
   }
   await fillMeanings(db, meaner);
   return { added, skipped };

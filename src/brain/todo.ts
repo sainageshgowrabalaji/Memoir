@@ -30,6 +30,10 @@ export const DEFAULT_HOUR = 9;
 
 function dueFrom(result: chrono.ParsedResult, now: Date): number {
   const date = result.start.date();
+  // "By Monday", said on a Monday, means next Monday.
+  if (result.start.isCertain('weekday') && !result.start.isCertain('day') && !result.start.isCertain('hour') && date.toDateString() === now.toDateString()) {
+    date.setDate(date.getDate() + 7);
+  }
   if (!result.start.isCertain('hour')) {
     date.setHours(DEFAULT_HOUR, 0, 0, 0);
     // "Today" said at 3 PM should not be due six hours ago.
@@ -61,8 +65,12 @@ export function detectTodo(text: string, now: Date = new Date()): TodoGuess | nu
       .replace(/\s{2,}/g, ' ')
       .replace(/^[\s,:;-]+|[\s,.;:!?-]+$/g, '')
       // "book the tickets by Friday" loses "Friday" to the due date, so drop the "by" left behind.
-      .replace(/\s+(?:by|on|at|before|until|till|in|this|next|coming)$/i, '')
+      .replace(/(?:\s+(?:by|on|at|before|after|until|till|in|this|next|coming|for))+$/i, '')
       .replace(/[\s,.;:!?-]+$/g, '');
+    // "I'm going to the gym" is going somewhere, not "the gym" as a thing to do.
+    if (lead && /going to|gonna/i.test(lead[0]) && /^(?:the|a|an|my|our|his|her|their|office|work|school|college|gym|bed|church|temple|mosque|market|town|home)\b/i.test(title)) {
+      title = `go to ${title}`;
+    }
     if (!title) continue;
 
     return {

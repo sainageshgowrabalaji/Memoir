@@ -1,13 +1,12 @@
-// Moving Memoir's data in and out as files: a backup you keep in iCloud Drive or Files, bringing a
-// backup back, and reading WhatsApp or Instagram exports. Files are picked with the phone's own
-// picker and shared with its own share sheet, so you choose where they go.
+// Moving Memoir's data in and out as one file: a backup you keep in iCloud Drive or Files, and
+// bringing a backup back. Files are picked with the phone's own picker and shared with its own
+// share sheet, so you choose where they go. Nothing is uploaded by Memoir itself.
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8 } from 'fflate';
 import { Platform } from 'react-native';
 
-import { linksFromExport, type ImportedLink } from '@/brain/imports';
 import { exportData, importData, isBackup, type BackupData } from '@/db/repo';
 import type { Db } from '@/db/schema';
 
@@ -19,16 +18,6 @@ async function pickFile(): Promise<Picked | null> {
   const asset = result.assets[0];
   if (Platform.OS === 'web' && asset.file) return { name: asset.name, bytes: new Uint8Array(await asset.file.arrayBuffer()) };
   return { name: asset.name, bytes: await new File(asset.uri).bytes() };
-}
-
-/** The text files in what was picked. A .zip is opened and only its text, JSON and HTML files are read. */
-function textFiles(picked: Picked): { name: string; text: string }[] {
-  const isZip = /\.zip$/i.test(picked.name) || (picked.bytes[0] === 0x50 && picked.bytes[1] === 0x4b);
-  if (!isZip) return [{ name: picked.name, text: strFromU8(picked.bytes) }];
-  const files = unzipSync(picked.bytes, {
-    filter: (f) => /\.(txt|json|html?)$/i.test(f.name) && f.originalSize < 30_000_000 && !/(^|\/)__MACOSX\//.test(f.name),
-  });
-  return Object.entries(files).map(([name, data]) => ({ name, text: strFromU8(data) }));
 }
 
 // ------------------------------------------------------------ backup
@@ -103,21 +92,4 @@ export async function restoreBackup(db: Db): Promise<RestoreResult> {
   };
   const { added, skipped } = await importData(db, data, photoFor);
   return { kind: 'backup', added, skipped };
-}
-
-// ------------------------------------------------------------ old saves
-
-export type PickedExport = { name: string; links: ImportedLink[] } | null;
-
-/** Opens a WhatsApp or Instagram export and finds every link in it. */
-export async function pickExport(): Promise<PickedExport> {
-  const picked = await pickFile();
-  if (!picked) return null;
-  const files = textFiles(picked);
-  // In an Instagram export only the saved posts matter, not likes, comments or messages.
-  const saved = files.filter((f) => /saved_posts|saved_collections/i.test(f.name));
-  const chat = files.filter((f) => /_chat\.txt$|whatsapp/i.test(f.name));
-  const chosen = saved.length ? saved : chat.length ? chat : files;
-  const links = chosen.flatMap((f) => linksFromExport(f.text, f.name));
-  return { name: picked.name, links };
 }
