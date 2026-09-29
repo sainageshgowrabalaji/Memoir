@@ -40,7 +40,7 @@ Memoir runs inside the free **Expo Go** app, and Expo hosts it for free, so your
    npx eas-cli@latest login
    npx eas-cli@latest init
    npx eas-cli@latest update:configure
-   npx eas-cli@latest update --channel main --message "Memoir"
+   npx eas-cli@latest update --channel main --environment production --message "Memoir"
    ```
 
 3. Open [expo.dev](https://expo.dev), go to the Memoir project, then Updates, open the update you just published and tap **Preview**. Scan the QR code with the iPhone camera and it opens in Expo Go.
