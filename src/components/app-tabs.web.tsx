@@ -3,7 +3,7 @@ import { Tabs, TabList, TabSlot, TabTrigger, type TabTriggerSlotProps } from 'ex
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/hooks/use-palette';
-import { useToCheckCount } from '@/hooks/use-to-check-count';
+import { useOpenTaskCount } from '@/hooks/use-open-task-count';
 
 function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
   const c = usePalette();
@@ -17,19 +17,19 @@ function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
 
 export default function AppTabs() {
   const c = usePalette();
-  const toCheck = useToCheckCount();
+  const due = useOpenTaskCount();
   return (
     <Tabs>
       <TabSlot style={{ flex: 1 }} />
       <TabList style={[styles.list, { backgroundColor: c.background, borderTopColor: c.line }]}>
         <TabTrigger name="index" href="/" asChild>
-          <TabButton>Memoir</TabButton>
+          <TabButton>Today</TabButton>
         </TabTrigger>
-        <TabTrigger name="ask" href="/ask" asChild>
-          <TabButton>Ask</TabButton>
+        <TabTrigger name="tasks" href="/tasks" asChild>
+          <TabButton>{due ? `Tasks (${due})` : 'Tasks'}</TabButton>
         </TabTrigger>
-        <TabTrigger name="todos" href="/todos" asChild>
-          <TabButton>{toCheck ? `Follow up (${toCheck})` : 'Follow up'}</TabButton>
+        <TabTrigger name="journal" href="/journal" asChild>
+          <TabButton>Journal</TabButton>
         </TabTrigger>
       </TabList>
     </Tabs>
@@ -37,7 +37,7 @@ export default function AppTabs() {
 }
 
 const styles = StyleSheet.create({
-  list: { flexDirection: 'row', justifyContent: 'space-around', borderTopWidth: 1, paddingTop: 8, paddingBottom: 12 },
+  list: { flexDirection: 'row', justifyContent: 'space-around', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, paddingBottom: 14 },
   button: { alignItems: 'center', paddingHorizontal: 18, gap: 6 },
   label: { fontSize: 14, fontWeight: '700' },
   bar: { height: 3, width: 28, borderRadius: 2 },

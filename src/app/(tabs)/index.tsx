@@ -1,56 +1,78 @@
+// Today. A greeting, one place to tell Memoir anything, what today holds, and your day in a line or
+// two. Nothing to learn: talk to it the way you would to a friend who keeps your notes.
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useCallback, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
-import { CATEGORY_BY_ID, type CategoryId } from '@/brain/categories';
-import type { Scope } from '@/brain/analyze';
-import { CaptureBox } from '@/components/capture-box';
-import { CopiedLinkOffer } from '@/components/copied-link-offer';
+import { HeaderArt } from '@/components/art';
 import { DiaryCard } from '@/components/diary-card';
-import { ItemCard } from '@/components/item-card';
-import { Body, Chip, Label, Notice, Title } from '@/components/ui';
-import { MaxContentWidth, Radius, Space } from '@/constants/theme';
-import { countToCheck, fromYourPast, interests, listItems, saveCapture, shelves, type Item, type Shelf } from '@/db/repo';
-import { usePalette, useShelfColor } from '@/hooks/use-palette';
+import { Group, HabitRow, SectionTitle, TodoRow } from '@/components/rows';
+import { TellBox } from '@/components/tell-box';
+import { Body, Button, IconButton, Screen, Title, Toast, tap } from '@/components/ui';
+import { Fonts, Radius, Space } from '@/constants/theme';
+import {
+  dismissHabitSuggestion,
+  habitSuggestion,
+  habitsToday,
+  loadLearned,
+  moveTodo,
+  setHabitDone,
+  tellAs,
+  type HabitToday,
+} from '@/db/assistant';
+import { deleteTodo, listTodos, setTodoDone, type Todo } from '@/db/repo';
+import { usePalette } from '@/hooks/use-palette';
 import { useDb } from '@/lib/database';
 import { dataChanged, useDataChanged } from '@/lib/events';
-import { ago, byDay, longDate } from '@/lib/format';
-import { savedMessage } from '@/lib/messages';
-import { readPendingPages } from '@/lib/page-sync';
-import { askForReminders, remindersAllowed, syncReminders } from '@/lib/reminders';
+import { syncReminders } from '@/lib/reminders';
 
-type Filter = { scope?: Scope; category?: CategoryId; kind?: 'diary' };
+function greeting(hour: number) {
+  if (hour < 5) return 'Good night';
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
 
-export default function HomeScreen() {
+function endOfDay(t: number, plusDays = 0) {
+  const d = new Date(t);
+  d.setDate(d.getDate() + plusDays);
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+}
+
+export default function TodayScreen() {
   const db = useDb();
   const c = usePalette();
-  const shelfColor = useShelfColor();
-  const [items, setItems] = useState<Item[]>([]);
-  const [counts, setCounts] = useState<Shelf[]>([]);
-  const [past, setPast] = useState<Item | null>(null);
-  const [filter, setFilter] = useState<Filter>({});
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [habits, setHabits] = useState<HabitToday[]>([]);
+  const [tomorrow, setTomorrow] = useState(0);
+  const [anytime, setAnytime] = useState(0);
+  const [suggestion, setSuggestion] = useState<{ word: string; days: number } | null>(null);
+  const [times, setTimes] = useState<Record<string, [number, number]>>({});
   const [message, setMessage] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [loaded, setLoaded] = useState(false);
-  const [today, setToday] = useState('');
-  const [toCheck, setToCheck] = useState(0);
-  const [lately, setLately] = useState<Awaited<ReturnType<typeof interests>> | null>(null);
 
   const load = useCallback(async () => {
-    const [list, shelfCounts, memory, waiting] = await Promise.all([
-      listItems(db, { scope: filter.scope ?? null, category: filter.category ?? null, kind: filter.kind ?? null, limit: 200 }),
-      shelves(db),
-      fromYourPast(db),
-      countToCheck(db),
+    const at = Date.now();
+    const [open, closed, habitList, idea, learned] = await Promise.all([
+      listTodos(db, true),
+      listTodos(db, false),
+      habitsToday(db, new Date(at)),
+      habitSuggestion(db, new Date(at)),
+      loadLearned(db),
     ]);
-    setLately(await interests(db));
-    setItems(list);
-    setToCheck(waiting);
-    setCounts(shelfCounts);
-    setPast(memory);
-    setToday(longDate(Date.now()));
+    // What you ticked today stays, crossed out, so the day shows what you got done.
+    const doneToday = closed.filter((t) => t.doneAt !== null && t.doneAt > endOfDay(at, -1)).reverse();
+    setTodos([...open.filter((t) => t.dueAt !== null && t.dueAt <= endOfDay(at)), ...doneToday]);
+    setTomorrow(open.filter((t) => t.dueAt !== null && t.dueAt > endOfDay(at) && t.dueAt <= endOfDay(at, 1)).length);
+    setAnytime(open.filter((t) => t.dueAt === null).length);
+    setHabits(habitList.filter((h) => h.dueToday));
+    setSuggestion(idea);
+    setTimes(learned.times);
+    setNow(at);
     setLoaded(true);
-  }, [db, filter]);
+  }, [db]);
 
   useFocusEffect(
     useCallback(() => {
@@ -59,149 +81,142 @@ export default function HomeScreen() {
   );
   useDataChanged(load);
 
-  async function save(text: string, photoUri: string | null) {
-    const saved = await saveCapture(db, { text, photoUri });
-    let remindersOn = true;
-    if (saved.todo || saved.item.checkState === 'to_check') {
-      remindersOn = (await remindersAllowed()) || (await askForReminders());
-      if (remindersOn) await syncReminders(db);
-    }
-    setMessage(savedMessage(saved, remindersOn, Date.now()));
+  async function changed() {
     dataChanged();
-    // Read the reel or page now, while you are still here. The card fills in when it is done.
-    if (saved.item.page.status === 'pending') void readPendingPages(db);
+    await syncReminders(db).catch(() => 0);
   }
 
-  const total = counts.reduce((sum, s) => sum + s.count, 0);
-  const top = counts.filter((s) => s.category !== 'notes').slice(0, 3).map((s) => CATEGORY_BY_ID[s.category].label);
-  const sections = useMemo(() => byDay(items), [items]);
-  const filtered = Boolean(filter.scope || filter.category || filter.kind);
-
-  const header = (
-    <View style={styles.header}>
-      <View style={styles.titleRow}>
-        <View style={{ flex: 1 }}>
-          <Title>Memoir</Title>
-          <Body muted>{today || ' '}</Body>
-        </View>
-        <Pressable onPress={() => router.push('/settings')} accessibilityRole="button" accessibilityLabel="Backup and help" hitSlop={10}>
-          <Text style={[styles.more, { color: c.accent }]}>Backup</Text>
-        </Pressable>
-      </View>
-      <CopiedLinkOffer onSave={(link) => save(link, null)} />
-      <CaptureBox onSave={save} />
-      {message ? <Notice tone="success">{message}</Notice> : null}
-
-      {toCheck > 0 ? (
-        <Pressable
-          onPress={() => router.navigate('/todos')}
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.waiting, { backgroundColor: c.warnSoft, borderColor: c.warn }, pressed && { opacity: 0.8 }]}>
-          <Text style={[styles.waitingText, { color: c.warn }]}>
-            {toCheck === 1 ? '1 saved link is waiting for you to check it' : `${toCheck} saved links are waiting for you to check them`}
-          </Text>
-          <Text style={[styles.waitingGo, { color: c.warn }]}>Open</Text>
-        </Pressable>
-      ) : null}
-
-      {!filtered ? <DiaryCard /> : null}
-
-      {total >= 5 && top.length ? (
-        <View style={{ gap: 2 }}>
-          <Body muted style={styles.insight}>
-            You save most about {joinAnd(top)}.
-          </Body>
-          {lately && (lately.tags.length || lately.authors.length) ? (
-            <Body muted style={styles.insight}>
-              Lately into {[...lately.tags.slice(0, 3).map((t) => `#${t}`), ...lately.authors.slice(0, 2)].join('  ')}
-            </Body>
-          ) : null}
-        </View>
-      ) : null}
-
-      {total > 0 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          <Chip label="All" selected={!filtered} onPress={() => setFilter({})} />
-          <Chip label="Personal" selected={filter.scope === 'personal'} onPress={() => setFilter({ scope: 'personal' })} />
-          <Chip label="Public" selected={filter.scope === 'public'} onPress={() => setFilter({ scope: 'public' })} />
-          <Chip label="Diary" selected={filter.kind === 'diary'} onPress={() => setFilter({ kind: 'diary' })} />
-          {counts.map((s) => (
-            <Chip
-              key={s.category}
-              label={CATEGORY_BY_ID[s.category].label}
-              count={s.count}
-              dot={shelfColor(s.category)}
-              selected={filter.category === s.category}
-              onPress={() => setFilter({ category: s.category })}
-            />
-          ))}
-        </ScrollView>
-      ) : null}
-
-      {past && !filtered ? (
-        <View style={styles.past}>
-          <Label>From your past · {ago(past.createdAt)}</Label>
-          <ItemCard item={past} />
-        </View>
-      ) : null}
-    </View>
-  );
+  const hour = new Date(now).getHours();
+  const nothingToday = loaded && todos.length === 0 && habits.length === 0;
+  const doneHabits = habits.filter((h) => h.doneToday).length;
 
   return (
-    <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: c.background }]}>
-      <SectionList
-        sections={sections}
-        keyExtractor={(item) => String(item.id)}
-        ListHeaderComponent={header}
-        renderSectionHeader={({ section }) => (
-          <View style={[styles.dayHeader, { backgroundColor: c.background }]}>
-            <Label>{section.title}</Label>
-          </View>
-        )}
-        renderItem={({ item }) => (
-          <View style={styles.cardWrap}>
-            <ItemCard item={item} />
-          </View>
-        )}
-        ListEmptyComponent={
-          loaded ? (
-            <View style={styles.empty}>
-              <Text style={[styles.emptyTitle, { color: c.ink }]}>{filtered ? 'Nothing on this shelf yet.' : 'Your first memory goes here.'}</Text>
-              {!filtered ? (
-                <Body muted>
-                  Copy a reel link in Instagram and open Memoir, write down what a friend recommended, or say “Remind me to call Amma on
-                  Sunday at 7 pm”. Memoir sorts it, reads what a reel is about, and keeps reminding you until you have looked at it.
-                </Body>
-              ) : null}
-            </View>
-          ) : null
-        }
-        stickySectionHeadersEnabled={false}
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-      />
-    </SafeAreaView>
-  );
-}
+    <Screen
+      background={
+        <View style={styles.art} pointerEvents="none">
+          <HeaderArt hour={hour} />
+        </View>
+      }>
+      <View style={styles.header}>
+        <View style={{ flex: 1, gap: 4 }}>
+          <Title>{greeting(hour)}</Title>
+          <Body muted>{new Date(now).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</Body>
+        </View>
+        <IconButton icon="settings-outline" label="Settings and backup" onPress={() => router.push('/settings')} />
+      </View>
 
-function joinAnd(words: string[]) {
-  return words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}` : words[0];
+      <TellBox />
+      <Toast text={message} onDone={() => setMessage(null)} />
+
+      {suggestion ? (
+        <View style={[styles.suggest, { backgroundColor: c.surface, borderColor: c.line }]}>
+          <Text style={[styles.suggestText, { color: c.ink }]}>
+            You wrote about {suggestion.word} on {suggestion.days} days lately. Make it a habit you can tick each day?
+          </Text>
+          <View style={styles.row}>
+            <Button
+              label="Make it a habit"
+              kind="soft"
+              onPress={async () => {
+                const reply = await tellAs(db, `${suggestion.word} every day`, 'habit');
+                setMessage(reply.text);
+                await changed();
+              }}
+            />
+            <Button
+              label="Not now"
+              kind="plain"
+              onPress={async () => {
+                await dismissHabitSuggestion(db, suggestion.word);
+                setSuggestion(null);
+              }}
+            />
+          </View>
+        </View>
+      ) : null}
+
+      <View style={{ gap: Space.s }}>
+        <SectionTitle
+          title="Today"
+          right={
+            habits.length ? (
+              <Text style={[styles.count, { color: c.muted }]}>
+                {doneHabits} of {habits.length} habits
+              </Text>
+            ) : null
+          }
+        />
+        {nothingToday ? (
+          <View style={[styles.clear, { backgroundColor: c.surface, borderColor: c.line }]}>
+            <Text style={[styles.clearTitle, { color: c.ink }]}>Nothing due today.</Text>
+            <Body muted>
+              {anytime
+                ? `${anytime} ${anytime === 1 ? 'thing waits' : 'things wait'} on your list for whenever.`
+                : 'Tell Memoir what you need to remember, and it will remind you.'}
+            </Body>
+          </View>
+        ) : loaded ? (
+          <Group>
+            {todos.map((todo, i) => (
+              <TodoRow
+                key={`t${todo.id}`}
+                todo={todo}
+                now={now}
+                first={i === 0}
+                times={times}
+                onDone={async (t, done) => {
+                  await setTodoDone(db, t.id, done);
+                  await changed();
+                }}
+                onMove={async (t, at) => {
+                  await moveTodo(db, t.id, at);
+                  await changed();
+                }}
+                onDelete={async (t) => {
+                  await deleteTodo(db, t.id);
+                  await changed();
+                }}
+              />
+            ))}
+            {habits.map((habit, i) => (
+              <HabitRow
+                key={`h${habit.id}`}
+                habit={habit}
+                first={todos.length === 0 && i === 0}
+                showWeek={false}
+                onDone={async (h, done) => {
+                  tap(done ? 'success' : 'light');
+                  await setHabitDone(db, h.id, done);
+                  await changed();
+                }}
+              />
+            ))}
+          </Group>
+        ) : null}
+        {loaded && (tomorrow || anytime) && !nothingToday ? (
+          <Button
+            label={[tomorrow ? `${tomorrow} tomorrow` : '', anytime ? `${anytime} for whenever` : ''].filter(Boolean).join(', ')}
+            kind="plain"
+            icon="chevron-forward"
+            style={styles.left}
+            onPress={() => router.navigate('/tasks')}
+          />
+        ) : null}
+      </View>
+
+      <DiaryCard onSaved={setMessage} />
+    </Screen>
+  );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  content: { paddingHorizontal: Space.l, paddingBottom: 120, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' },
-  header: { gap: Space.l, paddingTop: Space.l, paddingBottom: Space.s },
-  insight: { fontSize: 14.5 },
-  titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Space.m },
-  more: { fontSize: 15, fontWeight: '700', paddingTop: 10 },
-  waiting: { flexDirection: 'row', alignItems: 'center', gap: Space.m, borderWidth: 1, borderRadius: Radius.m, padding: Space.m },
-  waitingText: { flex: 1, fontSize: 15, fontWeight: '600', lineHeight: 20 },
-  waitingGo: { fontSize: 15, fontWeight: '800' },
-  chips: { gap: 8, paddingRight: Space.l },
-  past: { gap: Space.s },
-  dayHeader: { paddingTop: Space.l, paddingBottom: Space.s },
-  cardWrap: { marginBottom: Space.s + 2 },
-  empty: { gap: Space.s, paddingVertical: Space.xl },
-  emptyTitle: { fontSize: 18, fontWeight: '600' },
+  art: { position: 'absolute', top: 0, right: 0 },
+  header: { flexDirection: 'row', alignItems: 'flex-start', gap: Space.m, paddingTop: Space.xl, minHeight: 112 },
+  suggest: { borderRadius: Radius.l, borderWidth: StyleSheet.hairlineWidth, padding: Space.l, gap: Space.m },
+  suggestText: { fontSize: 15.5, lineHeight: 22, fontWeight: '500' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: Space.s, flexWrap: 'wrap' },
+  count: { fontSize: 13, fontWeight: '600' },
+  clear: { borderRadius: Radius.l, borderWidth: StyleSheet.hairlineWidth, padding: Space.l, gap: 4 },
+  clearTitle: { fontFamily: Fonts.displayMedium, fontSize: 18, lineHeight: 24 },
+  left: { alignSelf: 'flex-start' },
 });

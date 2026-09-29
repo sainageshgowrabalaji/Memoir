@@ -1,38 +1,46 @@
-// Backup, bringing in old saves from WhatsApp and Instagram, reminders, and how to save quickly.
+// Settings: reminders, what Memoir has learned about the way you talk, and backup. Everything here
+// is about this phone only. Nothing is sent anywhere.
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { ImportedLink } from '@/brain/imports';
-import { Body, Button, Chip, Label, Notice } from '@/components/ui';
+import { Body, Button, Label, Notice } from '@/components/ui';
 import { Fonts, MaxContentWidth, Radius, Space } from '@/constants/theme';
-import { BACKLOG_PER_DAY, countBacklog, getSetting, importLinks, promoteBacklog, setSetting } from '@/db/repo';
+import { forgetLearned, learnedSummary } from '@/db/assistant';
+import { getSetting, setSetting } from '@/db/repo';
+import { HELP_TEXT } from '@/brain/agent';
 import { usePalette } from '@/hooks/use-palette';
-import { pickExport, restoreBackup, shareBackup } from '@/lib/backup';
+import { restoreBackup, shareBackup } from '@/lib/backup';
 import { useDb } from '@/lib/database';
 import { dataChanged } from '@/lib/events';
 import { longDate } from '@/lib/format';
-import { readPendingPages } from '@/lib/page-sync';
-import { syncReminders } from '@/lib/reminders';
-
-type Found = { name: string; links: ImportedLink[] };
+import { askForReminders, remindersAllowed, syncReminders } from '@/lib/reminders';
 
 export default function SettingsScreen() {
   const db = useDb();
   const c = usePalette();
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+  const [brief, setBrief] = useState(true);
+  const [nudge, setNudge] = useState(true);
+  const [learned, setLearned] = useState<string[]>([]);
   const [lastBackup, setLastBackup] = useState<number | null>(null);
-  const [backlog, setBacklog] = useState(0);
-  const [diaryNudge, setDiaryNudge] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ tone: 'success' | 'warn'; text: string } | null>(null);
-  const [found, setFound] = useState<Found | null>(null);
 
   const load = useCallback(async () => {
-    const [last, waiting, nudge] = await Promise.all([getSetting(db, 'last_backup', ''), countBacklog(db), getSetting(db, 'diary_nudge', 'on')]);
+    const [ok, b, n, summary, last] = await Promise.all([
+      remindersAllowed(),
+      getSetting(db, 'morning_brief', 'on'),
+      getSetting(db, 'diary_nudge', 'on'),
+      learnedSummary(db),
+      getSetting(db, 'last_backup', ''),
+    ]);
+    setAllowed(ok);
+    setBrief(b === 'on');
+    setNudge(n === 'on');
+    setLearned(summary.lines);
     setLastBackup(last ? Number(last) : null);
-    setBacklog(waiting);
-    setDiaryNudge(nudge === 'on');
   }, [db]);
   useFocusEffect(
     useCallback(() => {
@@ -53,22 +61,93 @@ export default function SettingsScreen() {
     }
   }
 
+  async function toggle(key: 'morning_brief' | 'diary_nudge', on: boolean) {
+    await setSetting(db, key, on ? 'on' : 'off');
+    if (key === 'morning_brief') setBrief(on);
+    else setNudge(on);
+    await syncReminders(db).catch(() => 0);
+  }
+
   return (
     <SafeAreaView edges={['top', 'bottom']} style={[styles.screen, { backgroundColor: c.background }]}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.topRow}>
-          <Text style={[styles.title, { color: c.ink }]}>Backup and more</Text>
+          <Text style={[styles.title, { color: c.ink }]}>Settings</Text>
           <Button label="Close" onPress={() => router.back()} />
         </View>
         {message ? <Notice tone={message.tone}>{message.text}</Notice> : null}
 
-        <View style={styles.section}>
+        <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.line }]}>
+          <Label>Reminders</Label>
+          {allowed === false && Platform.OS !== 'web' ? (
+            <View style={{ gap: Space.s }}>
+              <Body>Reminders are off for Memoir. Turn them on so it can nudge you when things are due.</Body>
+              <Button
+                label="Turn on reminders"
+                kind="primary"
+                style={styles.left}
+                onPress={async () => {
+                  if (await askForReminders()) await syncReminders(db).catch(() => 0);
+                  await load();
+                }}
+              />
+            </View>
+          ) : null}
+          <Toggle
+            title="Morning brief"
+            text="At 8 AM, what today holds. What is due, your habits, and anything waiting on your list."
+            value={brief}
+            onChange={(on) => void toggle('morning_brief', on)}
+          />
+          <View style={[styles.divider, { backgroundColor: c.line }]} />
+          <Toggle
+            title="Evening diary nudge"
+            text="At 9:30 PM, a gentle “how was your day?”, skipped once you have written."
+            value={nudge}
+            onChange={(on) => void toggle('diary_nudge', on)}
+          />
+          <Body muted style={styles.small}>
+            To-dos remind you when they are due, then again a day, three days and a week later until you tick them. Habits remind you at their time.
+          </Body>
+        </View>
+
+        <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.line }]}>
+          <Label>What Memoir has learned about you</Label>
+          {learned.length ? (
+            learned.map((line) => (
+              <Body key={line} style={styles.small}>
+                • {line}
+              </Body>
+            ))
+          ) : (
+            <Body muted>Nothing yet. When you tap “Not right?” on a reply, or move a reminder you set for “evening”, Memoir learns what you meant.</Body>
+          )}
+          <Body muted style={styles.small}>
+            It learns only from you, on this phone. Nothing is uploaded, and no one else&apos;s data is mixed in.
+          </Body>
+          {learned.length ? (
+            <Button
+              label="Forget what it learned"
+              kind="danger"
+              style={styles.left}
+              onPress={() =>
+                void run('forget', async () => {
+                  await forgetLearned(db);
+                  setMessage({ tone: 'success', text: 'Forgotten. Memoir starts fresh with the way you talk.' });
+                })
+              }
+            />
+          ) : null}
+        </View>
+
+        <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.line }]}>
           <Label>Backup</Label>
           <Body>
-            Everything you save lives only on this phone. Keep a backup in iCloud Drive or Files, so a new phone or a
-            reinstall never loses anything.
+            Everything lives only on this phone. Keep a backup in iCloud Drive or Files, so a new phone never loses anything.
           </Body>
-          <Body muted>{lastBackup ? `Last backup ${longDate(lastBackup)}.` : 'No backup yet.'}</Body>
+          <Body muted style={styles.small}>
+            {lastBackup ? `Last backup ${longDate(lastBackup)}.` : 'No backup yet.'}
+          </Body>
           <View style={styles.row}>
             <Button
               label="Save a backup"
@@ -78,18 +157,18 @@ export default function SettingsScreen() {
                 void run('backup', async () => {
                   const { items } = await shareBackup(db);
                   await setSetting(db, 'last_backup', String(Date.now()));
-                  setMessage({ tone: 'success', text: `Backup made with ${items} saves. Choose "Save to Files" to keep it.` });
+                  setMessage({ tone: 'success', text: `Backup made with ${items} notes and diary days, plus your to-dos, lists and habits. Choose “Save to Files” to keep it.` });
                 })
               }
             />
             <Button
-              label="Restore a backup"
+              label="Restore"
               busy={busy === 'restore'}
               onPress={() =>
                 void run('restore', async () => {
                   const result = await restoreBackup(db);
                   if (result.kind === 'backup') {
-                    setMessage({ tone: 'success', text: `Restored ${result.added} saves.${result.skipped ? ` ${result.skipped} ${result.skipped === 1 ? 'was' : 'were'} already here.` : ''}` });
+                    setMessage({ tone: 'success', text: `Restored ${result.added} things.${result.skipped ? ` ${result.skipped} were already here.` : ''}` });
                     dataChanged();
                     await syncReminders(db).catch(() => 0);
                   } else if (result.kind === 'not-a-backup') {
@@ -101,104 +180,16 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Label>Bring in old saves</Label>
-          <Body>Links you sent to your own WhatsApp chat, or saved on Instagram, can all come into Memoir.</Body>
-          <View style={[styles.steps, { backgroundColor: c.surface, borderColor: c.line }]}>
-            <Text style={[styles.stepTitle, { color: c.ink }]}>From WhatsApp</Text>
-            <Body muted>Open the chat, tap its name, then Export Chat, then Without Media, then Save to Files.</Body>
-            <Text style={[styles.stepTitle, { color: c.ink }]}>From Instagram</Text>
-            <Body muted>
-              Settings, then Accounts Center, then Your information and permissions, then Download your information. Pick only
-              Saved, format JSON. Instagram emails you when the file is ready. Save it to Files.
-            </Body>
-          </View>
-          {found ? (
-            <View style={{ gap: Space.s }}>
-              <Body>{found.links.length ? `Found ${found.links.length} links in ${found.name}.` : `No links found in ${found.name}.`}</Body>
-              {found.links.length ? (
-                <View style={styles.row}>
-                  <Button
-                    label="Bring them in"
-                    kind="primary"
-                    busy={busy === 'import'}
-                    onPress={() =>
-                      void run('import', async () => {
-                        const { added, skipped } = await importLinks(db, found.links);
-                        setFound(null);
-                        await promoteBacklog(db);
-                        setMessage({
-                          tone: 'success',
-                          text: `Brought in ${added} ${added === 1 ? 'link' : 'links'}${skipped ? `. ${skipped} ${skipped === 1 ? 'was' : 'were'} already saved` : ''}. ${BACKLOG_PER_DAY} come back each evening for you to check.`,
-                        });
-                        dataChanged();
-                        await syncReminders(db).catch(() => 0);
-                        void readPendingPages(db);
-                      })
-                    }
-                  />
-                  <Button label="Cancel" onPress={() => setFound(null)} />
-                </View>
-              ) : null}
-            </View>
-          ) : (
-            <Button
-              label="Choose the exported file"
-              busy={busy === 'pick'}
-              style={styles.left}
-              onPress={() =>
-                void run('pick', async () => {
-                  const picked = await pickExport();
-                  if (picked) setFound(picked);
-                })
-              }
-            />
-          )}
-          {backlog ? (
-            <View style={{ gap: Space.s }}>
-              <Body muted>
-                {backlog} old saves are waiting. {BACKLOG_PER_DAY} come back each evening.
-              </Body>
-              <Button
-                label={`Show me ${BACKLOG_PER_DAY} more now`}
-                style={styles.left}
-                onPress={() =>
-                  void run('more', async () => {
-                    await promoteBacklog(db, new Date(), true);
-                    dataChanged();
-                    router.navigate('/todos');
-                  })
-                }
-              />
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.section}>
-          <Label>Reminders</Label>
-          <Body>Saved links to check come together at 8 PM. To-dos remind you when they are due.</Body>
-          <Body>A diary nudge at 9:30 PM asks how your day was, unless you already wrote.</Body>
-          <View style={styles.row}>
-            {(['on', 'off'] as const).map((value) => (
-              <Chip
-                key={value}
-                label={value === 'on' ? 'Diary nudge on' : 'Off'}
-                selected={diaryNudge === (value === 'on')}
-                onPress={async () => {
-                  await setSetting(db, 'diary_nudge', value);
-                  setDiaryNudge(value === 'on');
-                  await syncReminders(db).catch(() => 0);
-                }}
-              />
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Label>Saving a reel in two taps</Label>
-          <Body>In Instagram, tap Share on the reel, then Copy link. Open Memoir and tap Save it.</Body>
-          <Body muted>
-            To stop the iPhone asking every time, go to Settings, then Apps, then Expo Go, then Paste from Other Apps, and choose Allow.
+        <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.line }]}>
+          <Label>Talking to Memoir</Label>
+          <Body style={styles.small}>{HELP_TEXT}</Body>
+          <Body muted style={styles.small}>
+            To talk instead of typing, tap the text box on Today, then the mic on the keyboard. On iPhone, dictation works without the internet once your
+            language is downloaded in Settings, General, Keyboard.
+          </Body>
+          <Body muted style={styles.small}>
+            You can also say “move the dentist to Friday”, “delete the gym reminder”, “mark call dad as done”, “remove milk from the shopping list”, or just
+            “undo”.
           </Body>
         </View>
       </ScrollView>
@@ -206,14 +197,30 @@ export default function SettingsScreen() {
   );
 }
 
+function Toggle({ title, text, value, onChange }: { title: string; text: string; value: boolean; onChange: (on: boolean) => void }) {
+  const c = usePalette();
+  return (
+    <View style={styles.toggle}>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={[styles.toggleTitle, { color: c.ink }]}>{title}</Text>
+        <Text style={[styles.toggleText, { color: c.muted }]}>{text}</Text>
+      </View>
+      <Switch value={value} onValueChange={onChange} trackColor={{ true: c.accent, false: c.sunken }} thumbColor={Platform.OS === 'android' ? c.surface : undefined} accessibilityLabel={title} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  content: { gap: Space.xl, padding: Space.l, paddingBottom: Space.xxl * 2, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' },
-  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Space.m },
-  title: { fontFamily: Fonts.serif, fontSize: 26, fontWeight: '600' },
-  section: { gap: Space.s },
+  content: { gap: Space.l, padding: Space.l, paddingBottom: Space.xxl * 2, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' },
+  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Space.m, paddingTop: Space.s },
+  title: { fontFamily: Fonts.display, fontSize: 30, lineHeight: 36 },
+  card: { borderRadius: Radius.l, borderWidth: StyleSheet.hairlineWidth, padding: Space.l, gap: Space.m },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: Space.s },
-  steps: { borderWidth: 1, borderRadius: Radius.m, padding: Space.m, gap: 6 },
-  stepTitle: { fontSize: 15, fontWeight: '700', marginTop: 4 },
   left: { alignSelf: 'flex-start' },
+  small: { fontSize: 14.5, lineHeight: 21 },
+  divider: { height: StyleSheet.hairlineWidth },
+  toggle: { flexDirection: 'row', alignItems: 'center', gap: Space.m },
+  toggleTitle: { fontSize: 16, fontWeight: '600' },
+  toggleText: { fontSize: 14, lineHeight: 19 },
 });

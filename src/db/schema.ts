@@ -1,10 +1,13 @@
 // The tables Memoir keeps on the phone, in one SQLite file that never leaves it.
 //
-//   items         every note, link and photo, with what Memoir worked out about it, what it
-//                 read from the link's page (a reel's caption, say), and whether you checked it
-//   todos         the to-do list, each one pointing back to the item it came from
-//   item_vectors  each item's meaning, one row per model, for search by meaning
-//   meta          small settings, like whether full-text search is available
+//   items         every note and diary day, in your own words, with what Memoir worked out
+//                 about it (people, a to-do in it). Older versions also saved links and photos.
+//   todos         to-dos and dated reminders, each one pointing back to what you said
+//   list_items    shopping, packing and any other list you keep
+//   habits        things you do on a schedule, with habit_logs holding a tick per day
+//   agent_log     what you told Memoir and what it did, so it can undo or be corrected
+//   item_vectors  each item's meaning, for finding notes by meaning
+//   meta          settings and what Memoir has learned about the way you talk
 //
 // user_version is SQLite's own schema number, so later versions of the app can
 // add columns without losing anything already saved. Each step below runs once.
@@ -17,7 +20,7 @@ export interface Db {
   getFirstAsync<T>(sql: string, params?: unknown[]): Promise<T | null>;
 }
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // Version 1. The first tables.
 const V1 = `
@@ -91,6 +94,46 @@ CREATE TABLE IF NOT EXISTS item_vectors (
 );
 `;
 
+// Version 4. The assistant: lists, habits with a tick per day, and a log of what it did for you,
+// so "undo" and "that was my diary, not a note" can put things right. `hidden` marks the words
+// behind a reminder ("remind me to call Amma at 7"). They stay searchable for answers, but the
+// Notes page shows only real notes.
+const V4 = `
+ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS list_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  list TEXT NOT NULL,
+  text TEXT NOT NULL,
+  done_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS list_items_list ON list_items (list, done_at);
+CREATE TABLE IF NOT EXISTS habits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  days TEXT NOT NULL DEFAULT '[0,1,2,3,4,5,6]',
+  hour INTEGER,
+  minute INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS habit_logs (
+  habit_id INTEGER NOT NULL REFERENCES habits (id) ON DELETE CASCADE,
+  day INTEGER NOT NULL,
+  PRIMARY KEY (habit_id, day)
+);
+ALTER TABLE todos ADD COLUMN repeat TEXT;
+CREATE TABLE IF NOT EXISTS agent_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  input TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  reply TEXT NOT NULL,
+  undo TEXT NOT NULL DEFAULT '[]',
+  undone INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+`;
+
 // Full-text search, like a tiny search engine inside the file. "porter" matches word
 // forms, so "hike" finds "hiking". If a phone's SQLite lacks it, Memoir falls back to LIKE.
 const COLUMNS = 'title, text, note, page_title, page_text, page_author, tags, people, category, source';
@@ -123,6 +166,7 @@ export async function migrate(db: Db): Promise<{ fullText: boolean }> {
   if (version < 1) await db.execAsync(V1);
   if (version < 2) await db.execAsync(V2);
   if (version < 3) await db.execAsync(V3);
+  if (version < 4) await db.execAsync(V4);
   if (version < SCHEMA_VERSION) await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   // Foreign keys are switched on per connection, so every time the app opens.
   await db.execAsync('PRAGMA foreign_keys = ON');
