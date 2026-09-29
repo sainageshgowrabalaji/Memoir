@@ -8,18 +8,18 @@
     "scheme": "memoir",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/images/icon.png"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#ECECFB",
+        "backgroundColor": "#F2ECE2",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "android.permission.RECORD_AUDIO",
+      "package": "com.sainagesh.memoir",
+      "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -32,11 +32,11 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FAF8F4",
+          "backgroundColor": "#F2ECE2",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76,
+          "imageWidth": 120,
           "dark": {
-            "backgroundColor": "#121118",
+            "backgroundColor": "#1C1916",
             "image": "./assets/images/splash-icon.png"
           }
         }
@@ -52,7 +52,8 @@
         "expo-image-picker",
         {
           "photosPermission": "Memoir saves the photos you pick, so you can find them later.",
-          "cameraPermission": "Memoir saves photos you take, so you can find them later."
+          "cameraPermission": "Memoir saves photos you take, so you can find them later.",
+          "microphonePermission": false
         }
       ]
     ],
