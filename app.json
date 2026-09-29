@@ -17,7 +17,11 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "single",
@@ -59,6 +63,16 @@
     "description": "A calm personal assistant on your phone. Tell it anything by typing or with the keyboard mic. Reminders, to-dos, lists, habits, a diary and notes, all offline and private.",
     "runtimeVersion": {
       "policy": "sdkVersion"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "95cc5771-1688-4e51-8459-41e81150d4af"
+      }
+    },
+    "owner": "sainagesh1999",
+    "updates": {
+      "url": "https://u.expo.dev/95cc5771-1688-4e51-8459-41e81150d4af"
     }
   }
 }
