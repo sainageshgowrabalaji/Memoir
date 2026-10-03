@@ -58,6 +58,16 @@ npx expo start
 
 Scan the QR code with the iPhone camera. The phone and the Mac need to be on the same Wi-Fi, or use `npx expo start --tunnel`.
 
+## A browser demo anyone can open
+
+`render.yaml` puts Memoir's browser version online as a free static site on [Render](https://render.com). There is no server and there are no keys. Everything a visitor types stays in their own browser.
+
+1. Sign in to Render with GitHub
+2. Choose **New**, then **Blueprint**, and pick this repository
+3. Press **Apply**, then open the address Render gives you
+
+Reminders by notification and backup by share sheet only work on a phone, so the browser version is for trying the assistant, not for daily use.
+
 ## Check the code
 
 ```bash

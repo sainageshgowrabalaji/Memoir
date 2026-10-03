@@ -1,0 +1,27 @@
+# Puts Memoir's browser version online as a free static site on Render.
+# In Render, choose New, then Blueprint, and pick this repository. There are no keys to fill in.
+services:
+  - type: web
+    name: memoir-demo
+    runtime: static
+    branch: master
+    autoDeployTrigger: commit
+    # --ignore-scripts skips the native build of a test-only package that the browser version never uses.
+    buildCommand: npm ci --ignore-scripts && npx expo export --platform web
+    staticPublishPath: ./dist
+    headers:
+      # SQLite runs in the browser as WebAssembly, and these two headers let it.
+      - path: /*
+        name: Cross-Origin-Embedder-Policy
+        value: credentialless
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+    routes:
+      # Send every address to the app, so a refresh on any screen still works.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
