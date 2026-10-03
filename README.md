@@ -1,5 +1,7 @@
 # Memoir
 
+**Live demo.** https://memoir-demo-f7o6.onrender.com (the browser version, where what you type stays in your browser)
+
 A calm personal assistant that lives on your phone and works without the internet.
 
 Tell it anything, typed or spoken with the keyboard mic, the way you would tell a friend. "Remind me to call Amma at 7." "Add milk and eggs to the shopping list." "Went to the gym and had lunch with Ravi." "What's on today?" Memoir works out what you meant, does it, and says what it did in one line. If it got it wrong, one tap undoes it or moves it where you meant, and it learns from that.
